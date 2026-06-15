@@ -1,0 +1,6 @@
+node_modules/
+downloads/
+bot_library/
+*.log
+stats.json
+bot_memory.json
