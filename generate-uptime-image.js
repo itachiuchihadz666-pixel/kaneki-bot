@@ -1,14 +1,21 @@
-const Jimp = require("jimp");
+const { Jimp, loadFont, rgbaToInt } = require("jimp");
 const fs = require("fs");
 const path = require("path");
+const axios = require("axios");
 
 const DOWNLOADS_DIR = path.join(__dirname, "downloads");
+const FONT_DIR =
+  "/home/runner/workspace/node_modules/.pnpm/@jimp+plugin-print@1.6.1/node_modules/@jimp/plugin-print/dist/fonts/open-sans/";
 
-const hex = (r, g, b, a = 255) => Jimp.rgbaToInt(r, g, b, a);
+const BG_URL = "https://i.pinimg.com/736x/f4/a8/10/f4a810f4c4e3f7a51f79cd324f27b82f.jpg";
+
+const hex = (r, g, b, a = 255) => rgbaToInt(r, g, b, a);
 
 const drawRect = (img, x, y, w, h, color) => {
-  for (let px = x; px < x + w; px++) {
-    for (let py = y; py < y + h; py++) {
+  const xEnd = Math.min(x + w, img.width);
+  const yEnd = Math.min(y + h, img.height);
+  for (let px = Math.max(x, 0); px < xEnd; px++) {
+    for (let py = Math.max(y, 0); py < yEnd; py++) {
       img.setPixelColor(color, px, py);
     }
   }
@@ -16,79 +23,108 @@ const drawRect = (img, x, y, w, h, color) => {
 
 const drawBar = (img, x, y, w, h, progress, colorFg, colorBg) => {
   drawRect(img, x, y, w, h, colorBg);
-  drawRect(img, x, y, Math.floor(w * progress), h, colorFg);
+  drawRect(img, x, y, Math.max(1, Math.floor(w * progress)), h, colorFg);
 };
 
 const generateUptimeImage = async ({ uptimeSecs, admins, cookieSavedAt }) => {
   try {
     if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 
-    const W = 900, H = 520;
-    const img = new Jimp(W, H, hex(8, 8, 20));
+    const W = 900, H = 540;
+    const cyan    = hex(0, 230, 255);
+    const violet  = hex(160, 60, 255);
+    const gold    = hex(255, 190, 40);
+    const white   = hex(255, 255, 255);
+    const darkOv  = hex(5, 5, 20, 200);
+    const darkCard = hex(10, 10, 35, 210);
+    const border  = hex(40, 40, 90, 255);
+    const teal    = hex(0, 200, 180);
 
-    const cyan = hex(0, 210, 220);
-    const violet = hex(140, 60, 220);
-    const gold = hex(255, 200, 50);
-    const white = hex(255, 255, 255);
-    const gray = hex(100, 100, 130);
-    const darkCard = hex(18, 18, 40);
-    const border = hex(50, 50, 90);
+    let bg;
+    try {
+      bg = await Jimp.read(BG_URL);
+      bg.resize({ w: W, h: H });
+    } catch {
+      bg = new Jimp({ width: W, height: H, color: hex(8, 8, 22) });
+    }
 
-    // outer glow border
-    drawRect(img, 0, 0, W, 4, cyan);
-    drawRect(img, 0, H - 4, W, 4, cyan);
-    drawRect(img, 0, 0, 4, H, cyan);
-    drawRect(img, W - 4, 0, 4, H, cyan);
+    const overlay = new Jimp({ width: W, height: H, color: darkOv });
+    bg.composite(overlay, 0, 0);
+    const img = bg;
 
-    // header card
-    drawRect(img, 20, 20, W - 40, 80, darkCard);
-    drawRect(img, 20, 20, W - 40, 4, violet);
+    // Outer border
+    drawRect(img, 0, 0, W, 5, cyan);
+    drawRect(img, 0, H - 5, W, 5, cyan);
+    drawRect(img, 0, 0, 5, H, cyan);
+    drawRect(img, W - 5, 0, 5, H, cyan);
 
-    // main card
-    drawRect(img, 20, 120, W - 40, 180, darkCard);
-    drawRect(img, 20, 120, 4, 180, gold);
+    // Header card
+    drawRect(img, 15, 15, W - 30, 75, darkCard);
+    drawRect(img, 15, 15, W - 30, 4, violet);
+    drawRect(img, 15, 86, W - 30, 4, cyan);
 
-    // admins card
-    drawRect(img, 20, 320, W - 40, 180, darkCard);
-    drawRect(img, 20, 320, 4, 180, violet);
+    // Uptime card
+    drawRect(img, 15, 105, W - 30, 160, darkCard);
+    drawRect(img, 15, 105, 4, 160, gold);
 
-    // uptime bar
-    const totalMax = 24 * 60 * 60;
-    const progress = Math.min(uptimeSecs / totalMax, 1);
-    drawBar(img, 40, 260, W - 80, 18, progress, cyan, border);
-    drawRect(img, 40, 258, W - 80, 2, gray);
+    // Admins card
+    drawRect(img, 15, 280, W - 30, 175, darkCard);
+    drawRect(img, 15, 280, 4, 175, violet);
 
-    // cookie bar
+    // Cookie bar
     const cookieAgeMs = cookieSavedAt ? Date.now() - new Date(cookieSavedAt).getTime() : 0;
     const cookieMaxMs = 7 * 24 * 60 * 60 * 1000;
     const cookieProgress = Math.max(0, 1 - cookieAgeMs / cookieMaxMs);
-    drawBar(img, 40, 290, W - 80, 14, cookieProgress, gold, border);
+    drawBar(img, 35, 230, W - 70, 12, cookieProgress, teal, border);
 
-    const fontLg = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-    const fontMd = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+    // Uptime bar (24h cycle)
+    const totalMax = 24 * 60 * 60;
+    const progress = Math.min(uptimeSecs / totalMax, 1);
+    drawBar(img, 35, 200, W - 70, 16, progress, cyan, border);
+
+    // Corner decorations
+    drawRect(img, 15, H - 50, W - 30, 35, darkCard);
+    drawRect(img, 15, H - 50, W - 30, 3, teal);
+
+    // Load fonts
+    const fontLg  = await loadFont(FONT_DIR + "open-sans-32-white/open-sans-32-white.fnt");
+    const fontMd  = await loadFont(FONT_DIR + "open-sans-16-white/open-sans-16-white.fnt");
+    const fontSm  = await loadFont(FONT_DIR + "open-sans-12-black/open-sans-12-black.fnt");
 
     const h = Math.floor(uptimeSecs / 3600);
     const m = Math.floor((uptimeSecs % 3600) / 60);
     const s = uptimeSecs % 60;
 
-    img.print(fontLg, 40, 35, `KANEKI BOT — UPTIME: ${String(h).padStart(2,"0")}h ${String(m).padStart(2,"0")}m ${String(s).padStart(2,"0")}s`);
-    img.print(fontMd, 40, 130, `[SYSTEM] Runtime Performance`);
-    img.print(fontMd, 40, 158, `Uptime Progress (24h cycle):`);
-    img.print(fontMd, 40, 218, `Cookie Health:`);
-    img.print(fontMd, 40, 240, `Next auto-refresh in: ${Math.max(0, Math.floor(60 - (cookieAgeMs / 60000) % 60))} min`);
+    // Header
+    img.print({ font: fontLg, x: 30, y: 25, text: `KANEKI BOT  |  UPTIME MONITOR` });
 
-    img.print(fontMd, 40, 330, `[ADMINS] Bot Moderators (${admins.length})`);
-    admins.slice(0, 5).forEach((a, i) => {
-      img.print(fontMd, 55, 360 + i * 26, `• ${a.name || a.id}`);
-    });
+    // Uptime section
+    img.print({ font: fontLg, x: 30, y: 112, text: `${String(h).padStart(2,"0")}h  ${String(m).padStart(2,"0")}m  ${String(s).padStart(2,"0")}s` });
+    img.print({ font: fontMd, x: 30, y: 155, text: `Runtime since last restart` });
+    img.print({ font: fontMd, x: 30, y: 175, text: `Uptime cycle (24h):` });
+    img.print({ font: fontMd, x: 30, y: 220, text: `Cookie health:` });
+
+    // Admins section
+    img.print({ font: fontMd, x: 30, y: 288, text: `BOT ADMINS  (${admins.length})` });
+
     if (admins.length === 0) {
-      img.print(fontMd, 55, 360, "No admins configured");
+      img.print({ font: fontMd, x: 45, y: 318, text: `No admins configured` });
+    } else {
+      const maxShow = Math.min(admins.length, 6);
+      for (let i = 0; i < maxShow; i++) {
+        const name = (admins[i].name || admins[i].id || "Unknown").replace(/[^\x00-\x7F]/g, "?");
+        img.print({ font: fontMd, x: 45, y: 318 + i * 28, text: `[${i + 1}]  ${name}` });
+      }
+      if (admins.length > 6) {
+        img.print({ font: fontMd, x: 45, y: 318 + 6 * 28, text: `... and ${admins.length - 6} more` });
+      }
     }
 
-    img.print(fontMd, 40, H - 30, `Generated: ${new Date().toISOString()}`);
+    // Footer
+    img.print({ font: fontMd, x: 30, y: H - 43, text: `Generated: ${new Date().toUTCString()}` });
 
     const outPath = path.join(DOWNLOADS_DIR, `uptime_${Date.now()}.png`);
-    await img.writeAsync(outPath);
+    await img.write(outPath);
     return outPath;
   } catch (e) {
     return null;
