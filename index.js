@@ -108,6 +108,31 @@ const removeAdminSetup = {};
 
 // ============ [ /اوامر — نظام قائمة الأوامر التفاعلية ] ============
 const menuMessages = new Map(); // messageID -> { threadID, timestamp }
+const gifMenuMessages = new Map(); // messageID -> { threadID, page, timestamp } — for hidden GIF commands
+
+// ============ [ نظام المراقبة ] ============
+const monitoringThreads = new Set(); // threadIDs with monitoring enabled
+
+// ============ [ نظام التفاعل العاطفي ] ============
+const MOOD_REACTIONS = [
+  { keywords: ["هههه", "ههه", "😂", "lol", "haha", "kk", "xd", "XD"], emoji: "😂" },
+  { keywords: ["حبيب", "احبك", "love", "❤", "حب", "قلب", "💕"], emoji: "❤️" },
+  { keywords: ["🔥", "حلو", "روعة", "ممتاز", "جميل", "wow", "رهيب"], emoji: "🔥" },
+  { keywords: ["ليش", "كيف", "وش", "ايش", "؟؟", "مو فاهم"], emoji: "🤔" },
+  { keywords: ["صح", "نعم", "اكيد", "ok", "تمام", "صحيح", "ايه"], emoji: "👍" },
+  { keywords: ["يا ربي", "سبحان", "الله", "استغفر"], emoji: "🙏" },
+  { keywords: ["حزين", "زعلان", "بكيت", "😢", "😭"], emoji: "😢" },
+];
+
+const getReactionEmoji = (text) => {
+  const lower = text.toLowerCase();
+  for (const mood of MOOD_REACTIONS) {
+    if (mood.keywords.some(k => lower.includes(k))) return mood.emoji;
+  }
+  return null;
+};
+
+const GIF_FILE_ID = "1x6ReiLcEHKUehT986JEEj5__wS5Gih9G";
 
 const KANEKI_GIF_URLS = [
   "https://media.tenor.com/TXs6O7SdSzsAAAAC/tokyo-ghoul-kaneki.gif",
@@ -226,8 +251,8 @@ const answers = {
 
 const speedWords = ["مدرسة", "مستشفى", "تكنولوجيا", "فيسبوك", "سايان", "انمي", "كمبيوتر"];
 
-// Kaneki AI trigger keywords
-const kanekiTriggers = ["كانيكي", "kaneki", "كانيكى"];
+// Kaneki AI trigger keywords — includes "امي كانيكي" and other variants
+const kanekiTriggers = ["كانيكي", "kaneki", "كانيكى", "كانكي", "كانيكيه", "يا كانيكي", "هيه كانيكي"];
 
 // ============ [ نظام الذاكرة - Memory System ] ============
 const MEMORY_FILE = path.join(__dirname, "bot_memory.json");
@@ -287,6 +312,39 @@ const getFilesFromFolder = (dirPath) => {
     .filter(filePath => fs.lstatSync(filePath).isFile());
 };
 
+// ============ [ تحميل صورة GIF القائمة من Google Drive ] ============
+const downloadMenuGif = async () => {
+  const GIF_CACHE = path.join(DOWNLOADS_DIR, "_menu_bg.gif");
+  if (fs.existsSync(GIF_CACHE) && fs.statSync(GIF_CACHE).size > 50000) return GIF_CACHE;
+  try {
+    const directUrl = `https://drive.google.com/uc?export=download&id=${GIF_FILE_ID}&confirm=t`;
+    const response = await axios.get(directUrl, {
+      responseType: "arraybuffer", timeout: 30000, maxRedirects: 10,
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+    });
+    const buf = Buffer.from(response.data);
+    const isHtml = buf.slice(0, 20).toString("utf8").toLowerCase().includes("<!doctype");
+    if (!isHtml && buf.length > 50000) {
+      fs.writeFileSync(GIF_CACHE, buf);
+      appendLog("INFO", `✅ تم تحميل GIF القائمة (${buf.length} بايت)`);
+      return GIF_CACHE;
+    }
+    const html = buf.toString("utf8").substring(0, 15000);
+    const uuidMatch = html.match(/uuid=([a-f0-9-]+)/);
+    if (uuidMatch) {
+      const confUrl = `https://drive.usercontent.google.com/download?id=${GIF_FILE_ID}&export=download&uuid=${uuidMatch[1]}&confirm=t`;
+      const confResponse = await axios.get(confUrl, { responseType: "arraybuffer", timeout: 30000, maxRedirects: 10 });
+      const confBuf = Buffer.from(confResponse.data);
+      if (confBuf.length > 50000) {
+        fs.writeFileSync(GIF_CACHE, confBuf);
+        appendLog("INFO", `✅ GIF القائمة جاهزة (uuid flow)`);
+        return GIF_CACHE;
+      }
+    }
+  } catch (e) { appendLog("WARN", `فشل تحميل GIF: ${e.message}`); }
+  return null;
+};
+
 // Image search using Wallhaven (replaces broken Pinterest API)
 const searchImages = async (query, count = 5) => {
   try {
@@ -337,6 +395,13 @@ const getAIReply = async (userMessage, senderName = "", longAnswer = false, thre
       ? `${personalityCore}${moodNote}\nالمطلوب: أجب بشكل مفصّل ومفيد لكن بأسلوبك الطبيعي كشخص عادي.${contextBlock}`
       : `${personalityCore}${moodNote}${contextBlock}`;
 
+    if (!process.env.GEMINI_API_KEY) {
+      const noKeyFallbacks = [
+        "وضّح أكثر 🤔", "مو فاهم قصدك 😅", "شرّح لي 🙄",
+        "وش تقصد بالضبط؟", "ها؟ قول بشكل واضح", "اكتب بشكل مفهوم عشان أرد"
+      ];
+      return pick(noKeyFallbacks);
+    }
     const result = await model.generateContent(`${systemPrompt}\n\nالرسالة: ${userMessage}`);
     const reply = result.response.text().trim();
 
@@ -347,7 +412,11 @@ const getAIReply = async (userMessage, senderName = "", longAnswer = false, thre
     return reply;
   } catch (e) {
     appendLog("ERROR", `AI error: ${e.message}`);
-    return "حدث خطأ مؤقت 🔄";
+    const aiErrorFallbacks = [
+      "مو راضي أرد الحين 😒", "جرب بعدين", "شغلة تقنية — حاول مرة ثانية",
+      "وضّح أكثر وأرد عليك", "الحين مشغول، كرر السؤال"
+    ];
+    return pick(aiErrorFallbacks);
   }
 };
 
@@ -790,6 +859,42 @@ const attemptLogin = () => {
         lastActiveThreadID = threadID;
         stats.groupsActive.add(threadID);
       }
+
+      // ============ [ المراقبة — معالجة الرسائل الكاملة (نص + وسائط) ] ============
+      if (monitoringThreads.has(threadID) && message.isGroup) {
+        const myID2 = api.getCurrentUserID ? String(api.getCurrentUserID()) : null;
+        if (!myID2 || senderID !== myID2) {
+          const sName2 = message.senderName || senderID;
+          // تخزين النص في الذاكرة
+          if (message.body && message.body.length > 1) {
+            addToMemory(threadID, sName2, `[رسالة] ${message.body.substring(0, 120)}`);
+          }
+          // تحليل المرفقات (صور/فيديو)
+          if (message.attachments && message.attachments.length > 0) {
+            for (const att of message.attachments) {
+              const attType = att.type || "unknown";
+              const attDesc = att.filename || att.url || "مرفق";
+              addToMemory(threadID, sName2, `[${attType}] ${attDesc.substring(0, 80)}`);
+              // تحليل الصور بالذكاء الاصطناعي إذا كان المفتاح متوفراً
+              if ((attType === "photo" || attType === "animated_image" || attType === "sticker") && att.previewUrl && process.env.GEMINI_API_KEY) {
+                try {
+                  const imgResp = await axios.get(att.previewUrl, { responseType: "arraybuffer", timeout: 10000 });
+                  const imgBase64 = Buffer.from(imgResp.data).toString("base64");
+                  const imgMime = att.previewUrl.includes(".png") ? "image/png" : "image/jpeg";
+                  const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                  const visionResult = await visionModel.generateContent([
+                    { inlineData: { mimeType: imgMime, data: imgBase64 } },
+                    "صف هذه الصورة بجملة قصيرة بالعربي"
+                  ]);
+                  const imgDesc = visionResult.response.text().trim().substring(0, 100);
+                  if (imgDesc) addToMemory(threadID, sName2, `[وصف_صورة] ${imgDesc}`);
+                } catch (visErr) {}
+              }
+            }
+          }
+        }
+      }
+
       if (!message.body) return;
 
       stats.messagesHandled++;
@@ -813,6 +918,23 @@ const attemptLogin = () => {
         }
         return Promise.resolve();
       };
+
+      // ============ [ GIF القائمة المخفية — كشف الرد على الصورة ] ============
+      if (message.messageReply && gifMenuMessages.has(message.messageReply.messageID)) {
+        const gifEntry = gifMenuMessages.get(message.messageReply.messageID);
+        const page = gifEntry.page;
+        const pageCommands = {
+          1: `╔════════════════════════╗\n  ⚡ 𝕃𝕀𝕊𝕋 👑 - الأوامر الإدارية ⚡\n╚════════════════════════╝\n┃\n┃  🛠️ /تشغيل — تفعيل البوت\n┃  ⛔ /ايقاف — تعطيل البوت\n┃  🔒 /قفل — حصر للمالك والمشرفين\n┃  🔓 /فتح — إتاحة للجميع\n┃  🔐 /قفل_كامل — المالك فقط\n┃  🔓 /فتح_كامل — إلغاء القفل الكامل\n┃  💬 /محاكاة_الكتابة [تشغيل/ايقاف]\n┃  👁️ /مراقبة تشغيل — مراقبة المجموعة\n┃  🚫 /مراقبة ايقاف — إيقاف المراقبة\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯`,
+          2: `╔════════════════════════╗\n  🛡️ 𝕃𝕀𝕊𝕋 𝟚 - الحماية والتطهير 🛡️\n╚════════════════════════╝\n┃\n┃  👑 هات ادمن — ترقيتك لـ Admin\n┃  👑 !كانيكي ادمن [رابط] — إضافة مشرف\n┃  🔻 !كانيكي نزع الادمن — نزع المشرف\n┃  ☢️ /تدمير طرد — طرد كل المشرفين\n┃  📉 /تدمير رتبة — نزع كل الرتب\n┃  🛡️ /حماية [تشغيل/ايقاف]\n┃  🚷 /طرد — طرد بالرد على رسالته\n┃  🚷 /منع_المغادرة [تشغيل/ايقاف]\n┃  🧹 /اصلاح — تنظيف الكنيات\n┃  🗑️ /مسح — حذف رسالة بالرد\n┃  🧹 /مسح_الكل — سحب آخر رسائل\n┃  🚪 /غادر — مغادرة المجموعة\n┃  🔍 /اعطني الايدي — ايدي شخص بالرد\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯`,
+          3: `╔════════════════════════╗\n  🎬 𝕃𝕀𝕊𝕋 𝟛 - الميديا والذكاء 🎬\n╚════════════════════════╝\n┃\n┃  🤖 اذكر كانيكي — ذكاء اصطناعي!\n┃  🧠 امي كانيكي [سؤال] — Kaneki AI\n┃  ❓ /سؤال [سؤالك] — إجابة AI مفصّلة\n┃  📌 بنترست [كلمة] — 5 صور من بنترست\n┃  📸 /افتار [اسم] — صور أنمي\n┃  🎵 /تحميل_صوت [الاسم] — تحميل أغنية\n┃  🔊 /صوت [النص] — نص إلى صوت\n┃  📛 /سيطرة_الاسم [الاسم] — قفل اسم المجموعة\n┃  👁️ /تثبيت_الكنية [الاسم] — فرض الاسم\n┃  👁️ /شارنغان [النص] — كنيات مؤقتة\n┃  📚 /مانغا — قراءة المانجا\n┃  🎬 /فيديو — الفيديوهات\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯`,
+          4: `╔════════════════════════╗\n  👑 𝕃𝕀𝕊𝕋 🜪 - الألعاب والأنظمة 👑\n╚════════════════════════╝\n┃\n┃  🎮 /اسرع — لعبة الكلمات المقلوبة\n┃  ☄️ /نيزك [النص] — رد تكراري تلقائي\n┃  🛑 /ايقاف_نيزك — إيقاف النيزك\n┃  ⚡ /برق | /برق_صامت — سبام مكرر\n┃  🚫 /ايقاف_البرق — إيقاف البرق\n┃  ⛈️ /رعد — رسالة ثابتة مجدولة\n┃  🛑 /ايقاف_الرعد — إيقاف الرعد\n┃  ⏱️ /ابتيم — وقت التشغيل\n┃  📊 /معلومات_المجموعة — إحصاءات\n┃  ⚡ /تشغيل_المحرك — أداء أقصى\n┃  🛑 /ايقاف_المحرك — وضع طبيعي\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯\n✨ Kaneki Bot — نظام متكامل ✨`,
+        };
+        const pageText = pageCommands[page];
+        if (pageText) {
+          reactToMessage(message.messageID, "📋");
+          return sendAndCache(pageText, threadID);
+        }
+      }
 
       // ============ [ /اوامر — Menu Reply Detection ] ============
       if (message.messageReply && menuMessages.has(message.messageReply.messageID)) {
@@ -1101,12 +1223,20 @@ const attemptLogin = () => {
         return sendAndCache(msg, threadID);
       }
 
-      // ============ [ كانيكي AI - Trigger مع الشخصية ] ============
+      // ============ [ كانيكي AI - Trigger مع الشخصية والتفاعل العاطفي ] ============
       const bodyLower = body.toLowerCase();
       const mentionsKaneki = kanekiTriggers.some(t => bodyLower.includes(t));
 
       if (mentionsKaneki) {
         const spamLvl = getSpamLevel(senderID);
+        // تفاعل عاطفي تلقائي بناءً على محتوى الرسالة
+        const moodEmoji = getReactionEmoji(body);
+        if (moodEmoji && Math.random() < 0.65) {
+          reactToMessage(message.messageID, moodEmoji);
+        } else if (Math.random() < 0.4) {
+          const defaultReacts = ["❤️", "👀", "😏", "🔥", "👍"];
+          reactToMessage(message.messageID, pick(defaultReacts));
+        }
 
         // مكتوم — تجاهل تام
         if (spamLvl === 3) {
@@ -1397,28 +1527,34 @@ const attemptLogin = () => {
         else if (mode === "ايقاف" || mode === "إيقاف") { antiOutSettings[threadID] = false; return sendAndCache("🔓 تم إيقاف نظام الحماية.", threadID); }
       }
 
-      if (body === "/الاوامر" || body === "/الاوامر 1") {
+      // ============ [ /الاوامر 1-4 — GIF مخفية تظهر عند الرد على الصورة ] ============
+      const gifPageMatch = body.match(/^\/الاوامر\s*([1-4])$/);
+      if (body === "/الاوامر" || gifPageMatch) {
+        const gifPage = gifPageMatch ? parseInt(gifPageMatch[1]) : 1;
         stats.commandsExecuted++;
-        await handleTypingAndDelay(threadID, 2000);
-        return sendAndCache(`╔════════════════════════╗\n  ⚡ 𝕎𝔼𝕃ℂ𝕆𝕄𝔼 𝕀ℕ 𝕂𝔸ℕ𝔼𝕂𝕀 𝕃𝕀𝕊𝕋 ⚡\n╚════════════════════════╝\n╭━━━〔 ⚙️ 𝕃𝕀𝕊𝕋 👑 - الأوامر الإدارية 〕━━━╮\n┃\n┃  🛠️ ◞ /تشغيل : لتفعيل استجابة البوت.\n┃  ⛔ ◞ /ايقاف : لتعطيل البوت بالكامل.\n┃  🔒 ◞ /قفل : حصر الاستخدام لمالك البوت.\n┃  🔓 ◞ /فتح : إتاحة البوت لجميع الأعضاء.\n┃  💬 ◞ /محاكاة_الكتابة [تشغيل/ايقاف]\n┃\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯\n💡 ⦗ أرسل [ /الاوامر 2 ] لعرض لوحة الحماية ⦘`, threadID);
-      }
-
-      if (body === "/الاوامر 2") {
-        stats.commandsExecuted++;
-        await handleTypingAndDelay(threadID, 1500);
-        return sendAndCache(`╭━━━〔 🛡️ 𝕃𝕀𝕊𝕋 𝟚 - الحماية والتطهير 〕━━━╮\n┃\n┃  👑 ◞ هات ادمن : ترقيتك لـ Admin.\n┃  👑 ◞ !كانيكي ادمن [رابط] : منح صلاحية أدمن.\n┃  🔻 ◞ !كانيكي نزع الادمن : نزع صلاحية أدمن.\n┃  ☢️ ◞ /تدمير طرد : طرد كافة المشرفين.\n┃  📉 ◞ /تدمير رتبة : تجريد المشرفين من رتبهم.\n┃  🛡️ ◞ /حماية [تشغيل/ايقاف] : حماية المالك.\n┃  🚷 ◞ /طرد : طرد العضو ( بالرد ).\n┃  🚷 ◞ /منع_المغادرة [تشغيل/ايقاف]\n┃  🧹 ◞ /اصلاح : تنظيف الكنيات.\n┃  🗑️ ◞ /مسح : حذف رسالة البوت ( بالرد ).\n┃  🧹 ◞ /مسح_الكل : سحب رسائل البوت.\n┃  🚪 ◞ /غادر : مغادرة المجموعة.\n┃\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯\n💡 ⦗ أرسل [ /الاوامر 3 ] لعرض لوحة الميديا ⦘`, threadID);
-      }
-
-      if (body === "/الاوامر 3") {
-        stats.commandsExecuted++;
-        await handleTypingAndDelay(threadID, 1500);
-        return sendAndCache(`╭━━━〔 🎬 𝕃𝕀𝕊𝕋 𝟛 - الميديا والذكاء 〕━━━╮\n┃\n┃  🤖 ◞ اذكر كانيكي : ذكاء اصطناعي يرد عليك!\n┃  ❓ ◞ /سؤال [سؤالك] : إجابة AI مفصّلة للكل\n┃  📌 ◞ بنترست [كلمة] : بحث عن 5 صور 🔥\n┃  📸 ◞ /افتار [اسم] : افتارات بدقة عالية 2K\n┃  🎙️ ◞ /تحميل_صوت [الاسم] : تحميل أغنية 💥\n┃  🎙️ ◞ /صوت [النص] : تحويل النص لصوت 🔊\n┃  📛 ◞ /سيطرة_الاسم [الاسم] : قفل اسم المجموعة\n┃  👁️ ◞ /تثبيت_الكنية [الاسم] : فرض الاسم\n┃  👁️ ◞ /شارنغان [النص] : تغيير الكنيات المؤقتة\n┃  📚 ◞ /مانغا : قراءة فصول المانجا\n┃  🎬 ◞ /فيديو : عرض الفيديوهات\n┃\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯\n💡 ⦗ أرسل [ /الاوامر 4 ] لعرض لوحة الألعاب ⦘`, threadID);
-      }
-
-      if (body === "/الاوامر 4") {
-        stats.commandsExecuted++;
-        await handleTypingAndDelay(threadID, 1500);
-        return sendAndCache(`╭━━━〔 👑 𝕃𝕀𝕊𝕋 🜪 - الألعاب والأنظمة 〕━━━╮\n┃\n┃  🎮 ◞ /اسرع : فعالية الكلمات المقلوبة.\n┃  ☄️ ◞ /نيزك [النص] : الرد التكراري التلقائي.\n┃  🛑 ◞ /ايقاف_نيزك : تعطيل نيزك.\n┃  ⚡ ◞ /برق | /برق_صامت : سبام مكرر.\n┃  🚫 ◞ /ايقاف_البرق : إلغاء البرق.\n┃  ⏱️ ◞ /ابتيم : مدة تشغيل البوت.\n┃\n╰━━━━━━━━━━━━━━━━━━━━━━━━╯\n✨ ⦗ Kaneki List - نظام متكامل! ⦘`, threadID);
+        reactToMessage(message.messageID, "📋");
+        await handleTypingAndDelay(threadID, 1000);
+        const hintText = `🔒【 القائمة ${gifPage} — أوامر مخفية 】\n\n🖼️ صورة القائمة أُرسلت\n👆 ارد على الصورة لتظهر لك الأوامر!`;
+        try {
+          const gifPath = await downloadMenuGif();
+          if (gifPath && fs.existsSync(gifPath)) {
+            api.sendMessage({ body: hintText, attachment: fs.createReadStream(gifPath) }, threadID, (err, info) => {
+              if (!err && info && info.messageID) {
+                gifMenuMessages.set(info.messageID, { threadID, page: gifPage, timestamp: Date.now() });
+                setTimeout(() => gifMenuMessages.delete(info.messageID), 2 * 60 * 60 * 1000);
+              }
+            });
+            return;
+          }
+        } catch {}
+        // Fallback: text-only hint with immediate reply to show commands
+        api.sendMessage({ body: hintText }, threadID, (err, info) => {
+          if (!err && info && info.messageID) {
+            gifMenuMessages.set(info.messageID, { threadID, page: gifPage, timestamp: Date.now() });
+            setTimeout(() => gifMenuMessages.delete(info.messageID), 2 * 60 * 60 * 1000);
+          }
+        });
+        return;
       }
 
       if (body.startsWith("/شارنغان ")) {
@@ -1552,6 +1688,37 @@ ${adminNames}
           sendAndCache(`⏱️ 【 وقت التشغيل 】\n🛑 ${h} ساعة | ${m} دقيقة | ${s} ثانية\n👑 المشرفون: ${admins.map(a => a.name).join(", ") || "لا يوجد"}`, threadID);
         }
         return;
+      }
+
+      // ============ [ /مراقبة — تشغيل/ايقاف المراقبة ] ============
+      if (body === "/مراقبة تشغيل") {
+        if (!isAdmin(senderID)) return sendAndCache("⛔ هذا الأمر للمشرفين فقط.", threadID);
+        stats.commandsExecuted++;
+        monitoringThreads.add(threadID);
+        reactToMessage(message.messageID, "👁️");
+        return sendAndCache(`👁️‍🗨️ 【 وضع المراقبة 】 مُفعَّل في هذه المجموعة.\n\n📝 سيتم حفظ جميع الرسائل والصور والفيديوهات في ذاكرة البوت.\n\n⚠️ للإيقاف: /مراقبة ايقاف`, threadID);
+      }
+
+      if (body === "/مراقبة ايقاف" || body === "/مراقبة إيقاف") {
+        if (!isAdmin(senderID)) return sendAndCache("⛔ هذا الأمر للمشرفين فقط.", threadID);
+        stats.commandsExecuted++;
+        monitoringThreads.delete(threadID);
+        reactToMessage(message.messageID, "🚫");
+        return sendAndCache(`🚫 【 المراقبة 】 تم إيقافها في هذه المجموعة.`, threadID);
+      }
+
+      // ============ [ /اعطني الايدي — معرف الشخص ] ============
+      if (body === "/اعطني الايدي" || body === "/ايدي") {
+        stats.commandsExecuted++;
+        if (message.messageReply && message.messageReply.senderID) {
+          const targetID = message.messageReply.senderID;
+          const targetName = message.messageReply.senderName || targetID;
+          reactToMessage(message.messageID, "🔍");
+          return sendAndCache(`🆔 【 معرف المستخدم 】\n\n👤 الاسم: ${targetName}\n🔢 الايدي: ${targetID}`, threadID);
+        } else {
+          reactToMessage(message.messageID, "🔍");
+          return sendAndCache(`🆔 【 معرفك أنت 】\n\n👤 ايدي المرسل: ${senderID}\n\n💡 رد على رسالة شخص آخر لمعرفة ايديه`, threadID);
+        }
       }
 
       if (body === "/معلومات_المجموعة") {
