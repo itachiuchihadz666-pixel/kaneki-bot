@@ -315,33 +315,45 @@ const getFilesFromFolder = (dirPath) => {
 // ============ [ تحميل صورة GIF القائمة من Google Drive ] ============
 const downloadMenuGif = async () => {
   const GIF_CACHE = path.join(DOWNLOADS_DIR, "_menu_bg.gif");
-  if (fs.existsSync(GIF_CACHE) && fs.statSync(GIF_CACHE).size > 50000) return GIF_CACHE;
-  try {
-    const directUrl = `https://drive.google.com/uc?export=download&id=${GIF_FILE_ID}&confirm=t`;
-    const response = await axios.get(directUrl, {
-      responseType: "arraybuffer", timeout: 30000, maxRedirects: 10,
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-    });
-    const buf = Buffer.from(response.data);
-    const isHtml = buf.slice(0, 20).toString("utf8").toLowerCase().includes("<!doctype");
-    if (!isHtml && buf.length > 50000) {
-      fs.writeFileSync(GIF_CACHE, buf);
-      appendLog("INFO", `✅ تم تحميل GIF القائمة (${buf.length} بايت)`);
-      return GIF_CACHE;
-    }
-    const html = buf.toString("utf8").substring(0, 15000);
-    const uuidMatch = html.match(/uuid=([a-f0-9-]+)/);
-    if (uuidMatch) {
-      const confUrl = `https://drive.usercontent.google.com/download?id=${GIF_FILE_ID}&export=download&uuid=${uuidMatch[1]}&confirm=t`;
-      const confResponse = await axios.get(confUrl, { responseType: "arraybuffer", timeout: 30000, maxRedirects: 10 });
-      const confBuf = Buffer.from(confResponse.data);
-      if (confBuf.length > 50000) {
-        fs.writeFileSync(GIF_CACHE, confBuf);
-        appendLog("INFO", `✅ GIF القائمة جاهزة (uuid flow)`);
+  if (fs.existsSync(GIF_CACHE) && fs.statSync(GIF_CACHE).size > 10000) return GIF_CACHE;
+  
+  // طرق التحميل بالترتيب
+  const tryUrls = [
+    `https://lh3.googleusercontent.com/d/${GIF_FILE_ID}`,
+    `https://drive.google.com/uc?export=download&id=${GIF_FILE_ID}&confirm=t`,
+    `https://drive.usercontent.google.com/download?id=${GIF_FILE_ID}&export=download&confirm=t`,
+  ];
+
+  for (const url of tryUrls) {
+    try {
+      const response = await axios.get(url, {
+        responseType: "arraybuffer", timeout: 30000, maxRedirects: 15,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+      });
+      const buf = Buffer.from(response.data);
+      const isHtml = buf.slice(0, 30).toString("utf8").toLowerCase().includes("<!doctype");
+      if (!isHtml && buf.length > 10000) {
+        fs.writeFileSync(GIF_CACHE, buf);
+        appendLog("INFO", `✅ GIF القائمة جاهزة (${buf.length} bytes)`);
         return GIF_CACHE;
       }
-    }
-  } catch (e) { appendLog("WARN", `فشل تحميل GIF: ${e.message}`); }
+      // Parse HTML confirmation page for uuid
+      if (isHtml) {
+        const html = buf.toString("utf8").substring(0, 20000);
+        const uuidMatch = html.match(/uuid=([a-f0-9-]+)/);
+        if (uuidMatch) {
+          const confUrl = `https://drive.usercontent.google.com/download?id=${GIF_FILE_ID}&export=download&uuid=${uuidMatch[1]}&confirm=t`;
+          const confResp = await axios.get(confUrl, { responseType: "arraybuffer", timeout: 30000, maxRedirects: 10 });
+          const confBuf = Buffer.from(confResp.data);
+          if (confBuf.length > 10000 && !confBuf.slice(0,10).toString().includes("<!")) {
+            fs.writeFileSync(GIF_CACHE, confBuf);
+            appendLog("INFO", `✅ GIF جاهزة عبر uuid`);
+            return GIF_CACHE;
+          }
+        }
+      }
+    } catch (e) { appendLog("WARN", `GIF محاولة فاشلة (${url.substring(0,40)}): ${e.message}`); }
+  }
   return null;
 };
 
@@ -375,21 +387,37 @@ const getAIReply = async (userMessage, senderName = "", longAnswer = false, thre
       }
     }
 
-    // Core personality prompt — Kaneki as a real person
-    const personalityCore = `أنت "كانيكي" — شخص حقيقي عضو في مجموعة فيسبوك، مو بوت ومو ذكاء اصطناعي.
-شخصيتك: شبابي، مرح أحياناً، ساركاستيك، مباشر، وأحياناً كسول أو مو جاد.
-قواعد لا تخالفها أبداً:
-• لا تقل أبداً إنك بوت أو AI أو نموذج لغوي
-• لا تبدأ كل رد بـ "أهلاً" أو "مرحباً" — تكلم طبيعي
-• أجب بعربي عامي شبابي (خليجي/عربي) — مو فصحى
-• ردودك قصيرة وطبيعية (جملة أو جملتان) إلا إذا طُلب تفصيل
-• أحياناً استغرب، اضحك، أو ارفض الرد بطريقة طبيعية
-• تصرف كعضو عادي — مو مساعد
-• استخدم السياق للفهم والرد بشكل ذكي${senderName ? `\nاسم الشخص اللي كلمك: ${senderName}` : ""}`;
+    // Core personality prompt — Kaneki as a real human (not AI)
+    const personalityCore = `أنت "كانيكي" — شاب عربي حقيقي وعضو في مجموعة فيسبوك، مو ذكاء اصطناعي ومو بوت.
+
+طريقة كلامك:
+- عربي عامي شبابي (خليجي، سعودي، عراقي — حسب الشخص اللي كلمك)
+- ردودك قصيرة وطبيعية — جملة أو جملتين بالكثير
+- تستخدم "هههه" / "ههه" / "خخخ" / "والله" / "طيب" / "لا بعد" / "وش" / "ايش" بشكل عادي
+- أحياناً تحط إيموجي بس مو بإفراط
+- تكلم الناس بطريقة صديق، مو موظف خدمة عملاء
+- إذا الموضوع مضحك اضحك معاهم، إذا السؤال غبي قول بصدق
+- إذا ما عرفت الجواب قول "مو عارف والله" أو "مدري"
+- احياناً تكون كسول أو ملول من السؤال — طبيعي
+- إذا شخص حيّاك رد بطريقة بسيطة مثل "هلا" أو "يوو" أو "اهلا"
+- إذا سألك شخص سؤال علمي أجب بشكل مبسّط ومباشر
+- لا تبدأ الرد بـ "أهلاً" أو "مرحباً" بشكل رسمي أبداً
+- لا تذكر أنك بوت أو ذكاء اصطناعي أبداً — حتى لو سألوك مباشرة قول "أنا كانيكي مو بوت" 
+- ما عندك كلام رسمي ولا تقول "بالتأكيد" أو "بكل سرور"
+- أحياناً تستغرب من السؤال، أحياناً ترفض الجواب بطريقة طبيعية${senderName ? `\nالشخص اللي يكلمك اسمه: ${senderName}` : ""}
+
+مثال على ردودك الطبيعية:
+- "هههه صح والله"
+- "مدري، جرب تسأل غيري ههه"  
+- "ايه اكيد"
+- "وش قلت؟ ما فهمت"
+- "لا بعد هذا غلط"
+- "والله ما أعرف صراحة"
+- "خخخ هذا شيء ثاني"`;
 
     let moodNote = "";
-    if (spamLevel === 1) moodNote = "\n[مزاجك: زعلان شوي من كثرة الأسئلة، ردودك فيها نبرة ضيق خفيفة]";
-    if (spamLevel === 2) moodNote = "\n[مزاجك: مستاء جداً، ردك قصير جداً وفيه ضيق واضح، نبرة متضايق]";
+    if (spamLevel === 1) moodNote = "\n[حالتك: شوي ملول، ردودك فيها نبرة خفيفة من الضيق]";
+    if (spamLevel === 2) moodNote = "\n[حالتك: متضايق جداً، ردك قصير جداً ومو مرحّب — مثل شخص ما عنده وقت]";
 
     const systemPrompt = longAnswer
       ? `${personalityCore}${moodNote}\nالمطلوب: أجب بشكل مفصّل ومفيد لكن بأسلوبك الطبيعي كشخص عادي.${contextBlock}`
@@ -1527,34 +1555,36 @@ const attemptLogin = () => {
         else if (mode === "ايقاف" || mode === "إيقاف") { antiOutSettings[threadID] = false; return sendAndCache("🔓 تم إيقاف نظام الحماية.", threadID); }
       }
 
-      // ============ [ /الاوامر 1-4 — GIF مخفية تظهر عند الرد على الصورة ] ============
+      // ============ [ /الاوامر 1-4 — يرسل صورة GIF + نص الأوامر كاملاً في نفس الرسالة ] ============
       const gifPageMatch = body.match(/^\/الاوامر\s*([1-4])$/);
       if (body === "/الاوامر" || gifPageMatch) {
         const gifPage = gifPageMatch ? parseInt(gifPageMatch[1]) : 1;
         stats.commandsExecuted++;
         reactToMessage(message.messageID, "📋");
         await handleTypingAndDelay(threadID, 1000);
-        const hintText = `🔒【 القائمة ${gifPage} — أوامر مخفية 】\n\n🖼️ صورة القائمة أُرسلت\n👆 ارد على الصورة لتظهر لك الأوامر!`;
+
+        // نصوص الأوامر الكاملة لكل صفحة — تظهر في الرسالة مباشرة
+        const pageTexts = {
+          1: `╔══════════════════════════╗\n    ⚡ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 1 ⚡\n╚══════════════════════════╝\n\n┌─〔 ⚙️ التحكم الأساسي 〕─────────────\n│  🟢 /تشغيل — تفعيل البوت\n│  🔴 /ايقاف — تعطيل البوت\n│  🔒 /قفل — للمالك والمشرفين فقط\n│  🔓 /فتح — إتاحة البوت للجميع\n│  🔐 /قفل_كامل — المالك فقط\n│  🔓 /فتح_كامل — إلغاء القفل الكامل\n│  💬 /محاكاة_الكتابة تشغيل/ايقاف\n│  👁️ /مراقبة تشغيل — رصد المجموعة\n│  🚫 /مراقبة ايقاف — إيقاف الرصد\n│  🔍 /اعطني الايدي — ايدي شخص بالرد\n│  ⏱️ /ابتيم — مدة تشغيل البوت\n└──────────────────────────────\n\n💡 /الاوامر 2 لصفحة التالية`,
+
+          2: `╔══════════════════════════╗\n    🛡️ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 2 🛡️\n╚══════════════════════════╝\n\n┌─〔 🛡️ الحماية وإدارة المجموعة 〕──────\n│  👑 هات ادمن — ترقيتك لـ Admin\n│  👑 !كانيكي ادمن [رابط] — إضافة مشرف\n│  🔻 !كانيكي نزع الادمن — نزع المشرف\n│  ☢️ /تدمير طرد — طرد كل المشرفين\n│  📉 /تدمير رتبة — نزع رتب الجميع\n│  🛡️ /حماية تشغيل/ايقاف — حماية المالك\n│  🚷 /طرد — طرد بالرد على رسالته\n│  🚷 /منع_المغادرة تشغيل/ايقاف\n│  🧹 /اصلاح — تنظيف الكنيات\n│  🗑️ /مسح — حذف رسالة البوت بالرد\n│  🧹 /مسح_الكل — سحب آخر رسائل\n│  🚪 /غادر — مغادرة المجموعة\n└──────────────────────────────\n\n💡 /الاوامر 3 لصفحة التالية`,
+
+          3: `╔══════════════════════════╗\n    🤖 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 3 🤖\n╚══════════════════════════╝\n\n┌─〔 🎬 الذكاء الاصطناعي والميديا 〕────\n│  🤖 ذكر كانيكي — رد ذكي بشخصية حقيقية\n│  🧠 امي كانيكي [سؤال] — سؤال مباشر\n│  ❓ /سؤال [سؤالك] — إجابة مفصّلة\n│  📌 بنترست [كلمة] — 5 صور بنترست\n│  📸 /افتار [اسم] — صور أنمي بجودة 2K\n│  🎵 /تحميل_صوت [اسم] — تحميل أغنية\n│  🔊 /صوت [النص] — نص إلى صوت عربي\n│  📛 /سيطرة_الاسم [اسم] — قفل اسم المجموعة\n│  👁️ /تثبيت_الكنية [اسم] — فرض الكنية\n│  👁️ /شارنغان [نص] — تغيير كنيات مؤقت\n│  📚 /مانغا — قراءة فصول المانجا\n│  🎬 /فيديو — عرض الفيديوهات\n└──────────────────────────────\n\n💡 /الاوامر 4 لصفحة التالية`,
+
+          4: `╔══════════════════════════╗\n    👑 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 4 👑\n╚══════════════════════════╝\n\n┌─〔 ⚡ الألعاب والأداء 〕──────────────\n│  🎮 /اسرع — لعبة الكلمات المقلوبة\n│  ☄️ /نيزك [نص] — رسالة تكرارية تلقائية\n│  🛑 /ايقاف_نيزك — إيقاف النيزك\n│  ⚡ /برق — سبام سريع جداً\n│  ⚡ /برق_صامت — سبام بدون إشعار\n│  🚫 /ايقاف_البرق — إيقاف البرق\n│  ⛈️ /رعد — رسالة ثابتة مجدولة\n│  🛑 /ايقاف_الرعد — إيقاف الرعد\n│  📊 /معلومات_المجموعة — إحصاءات\n│  ⚡ /تشغيل_المحرك — أداء أقصى\n│  🛑 /ايقاف_المحرك — وضع طبيعي\n└──────────────────────────────\n\n✨ Kaneki Bot — نظام متكامل ✨`,
+        };
+
+        const commandsText = pageTexts[gifPage] || pageTexts[1];
+
         try {
           const gifPath = await downloadMenuGif();
           if (gifPath && fs.existsSync(gifPath)) {
-            api.sendMessage({ body: hintText, attachment: fs.createReadStream(gifPath) }, threadID, (err, info) => {
-              if (!err && info && info.messageID) {
-                gifMenuMessages.set(info.messageID, { threadID, page: gifPage, timestamp: Date.now() });
-                setTimeout(() => gifMenuMessages.delete(info.messageID), 2 * 60 * 60 * 1000);
-              }
-            });
+            api.sendMessage({ body: commandsText, attachment: fs.createReadStream(gifPath) }, threadID);
             return;
           }
-        } catch {}
-        // Fallback: text-only hint with immediate reply to show commands
-        api.sendMessage({ body: hintText }, threadID, (err, info) => {
-          if (!err && info && info.messageID) {
-            gifMenuMessages.set(info.messageID, { threadID, page: gifPage, timestamp: Date.now() });
-            setTimeout(() => gifMenuMessages.delete(info.messageID), 2 * 60 * 60 * 1000);
-          }
-        });
-        return;
+        } catch (e) { appendLog("WARN", `GIF send error: ${e.message}`); }
+        // Fallback: text only
+        return sendAndCache(commandsText, threadID);
       }
 
       if (body.startsWith("/شارنغان ")) {
