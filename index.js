@@ -8,6 +8,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const playdl = require("play-dl");
 const YouTube = require("youtube-sr").default;
 const { generateUptimeImage } = require("./generate-uptime-image");
+const { generateCommandsMenuImage, generateCategoryDetailImage } = require("./generate-commands-image");
 
 const OWNER_ID = "100079889283302";
 const startTime = Date.now();
@@ -818,13 +819,26 @@ const attemptLogin = () => {
         const num = parseInt(body.trim());
         if (!isNaN(num) && num >= 1 && num <= COMMANDS_CATEGORIES.length) {
           const cat = COMMANDS_CATEGORIES[num - 1];
+          reactToMessage(message.messageID, "📋");
+          // Build Arabic text details
           const line = "─".repeat(32);
-          let msg = `${cat.emoji}【 ${cat.name} 】\n${line}\n\n`;
+          let arabicMsg = `${cat.emoji}【 ${cat.name} 】\n${line}\n\n`;
           cat.cmds.forEach((c, i) => {
-            msg += `${i + 1}. ${c.cmd}\n   ↳ ${c.desc}\n\n`;
+            arabicMsg += `${i + 1}. ${c.cmd}\n   ↳ ${c.desc}\n\n`;
           });
-          msg += `${line}\n💡 ردّ على رسالة القائمة برقم آخر (1-${COMMANDS_CATEGORIES.length}) لتصفح باقي الأقسام`;
-          return sendAndCache(msg, threadID);
+          arabicMsg += `${line}\n💡 ردّ على رسالة القائمة برقم آخر (1-${COMMANDS_CATEGORIES.length}) لتصفح الأقسام`;
+          // Try to generate category detail image
+          try {
+            const imgPath = await generateCategoryDetailImage(cat);
+            if (imgPath && fs.existsSync(imgPath)) {
+              api.sendMessage({ body: arabicMsg, attachment: fs.createReadStream(imgPath) }, threadID, () => {
+                try { if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath); } catch {}
+              });
+              return;
+            }
+          } catch {}
+          // Fallback: text only
+          return sendAndCache(arabicMsg, threadID);
         }
       }
 
@@ -1510,8 +1524,23 @@ const attemptLogin = () => {
           const m = Math.floor((totalSeconds % 3600) / 60);
           const s = totalSeconds % 60;
           reactToMessage(message.messageID, "✅");
+          const adminNames = admins.length > 0
+            ? admins.map((a, i) => `  ${i + 1}. ${a.name || a.id}`).join("\n")
+            : "  لا يوجد مشرفون";
           api.sendMessage({
-            body: `⚡【 KANEKI BOT — نظام المراقبة 】⚡\n⏱️ ${h}h ${m}m ${s}s تشغيل\n👑 المشرفون: ${admins.length > 0 ? admins.map(a => a.name).join(" • ") : "لا يوجد"}\n🍪 الكوكيز: ${cookieLastSaved ? "محدّثة" : "غير محفوظة"}`,
+            body:
+`╭━━━━━〔 ⚡ KANEKI BOT 〕━━━━━╮
+┃       🕐 وقـت التشـغيـل        ┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+
+⏱️  ${h} ساعة  |  ${m} دقيقة  |  ${s} ثانية
+
+╭──── 👑 قائمة المشرفين (${admins.length}) ────╮
+${adminNames}
+╰────────────────────────╯
+
+🍪 الكوكيز: ${cookieLastSaved ? "✅ محدّثة" : "⚠️ غير محفوظة"}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
             attachment: fs.createReadStream(imgPath)
           }, threadID, () => {
             try { if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath); } catch (e) {}
@@ -1599,7 +1628,7 @@ const attemptLogin = () => {
 
       if (body === "/غادر") { stats.commandsExecuted++; sendAndCache("🚪 مغادرة المجموعة...", threadID, () => { api.removeUserFromGroup(api.getCurrentUserID(), threadID); }); return; }
 
-      // ============ [ /اوامر — القائمة التفاعلية بـ GIF ] ============
+      // ============ [ /اوامر — القائمة التفاعلية بصورة كانيكي ] ============
       if (body === "/اوامر") {
         stats.commandsExecuted++;
         reactToMessage(message.messageID, "📋");
@@ -1616,32 +1645,28 @@ ${COMMANDS_CATEGORIES.map(c => `  ${c.num}. ${c.emoji} ${c.name}`).join("\n")}
 ┃     (1-${COMMANDS_CATEGORIES.length}) لعرض تفاصيل القسم     ┃
 ╰────────────────────────────╯`;
 
-        // Try to download and send Kaneki GIF
-        const gifUrl = KANEKI_GIF_URLS[Math.floor(Math.random() * KANEKI_GIF_URLS.length)];
+        // Generate the composed Kaneki menu image
         try {
-          const { default: axiosLib } = await import("axios");
-          const gifResp = await axiosLib.get(gifUrl, { responseType: "stream", timeout: 10000 });
-          const tmpGifPath = path.join(__dirname, "downloads", `kaneki_menu_${Date.now()}.gif`);
-          if (!fs.existsSync(path.join(__dirname, "downloads"))) fs.mkdirSync(path.join(__dirname, "downloads"), { recursive: true });
-          const wstream = fs.createWriteStream(tmpGifPath);
-          await new Promise((res, rej) => { gifResp.data.pipe(wstream); wstream.on("finish", res); wstream.on("error", rej); });
-          api.sendMessage({ body: menuText, attachment: fs.createReadStream(tmpGifPath) }, threadID, (err, info) => {
-            try { if (fs.existsSync(tmpGifPath)) fs.unlinkSync(tmpGifPath); } catch {}
-            if (!err && info && info.messageID) {
-              menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
-              // Expire after 1 hour
-              setTimeout(() => menuMessages.delete(info.messageID), 3600000);
-            }
-          });
-        } catch (gifErr) {
-          // Fallback: send text-only menu
-          api.sendMessage(menuText, threadID, (err, info) => {
-            if (!err && info && info.messageID) {
-              menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
-              setTimeout(() => menuMessages.delete(info.messageID), 3600000);
-            }
-          });
-        }
+          const imgPath = await generateCommandsMenuImage();
+          if (imgPath && fs.existsSync(imgPath)) {
+            api.sendMessage({ body: menuText, attachment: fs.createReadStream(imgPath) }, threadID, (err, info) => {
+              try { if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath); } catch {}
+              if (!err && info && info.messageID) {
+                menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
+                setTimeout(() => menuMessages.delete(info.messageID), 3600000);
+              }
+            });
+            return;
+          }
+        } catch {}
+
+        // Fallback: text-only menu
+        api.sendMessage(menuText, threadID, (err, info) => {
+          if (!err && info && info.messageID) {
+            menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
+            setTimeout(() => menuMessages.delete(info.messageID), 3600000);
+          }
+        });
         return;
       }
 
