@@ -1,10 +1,22 @@
 [build]
 builder = "nixpacks"
+buildCommand = "npm install --production=false"
+
+[build.env]
+NODE_VERSION = "20"
+NPM_CONFIG_PRODUCTION = "false"
 
 [deploy]
 startCommand = "node index.js"
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 10
+restartPolicyMaxRetries = 15
+healthcheckPath = "/"
+healthcheckTimeout = 300
 
-[build.env]
-NODE_VERSION = "20"
+# ============================================================
+#  Environment Variables — set these in Railway dashboard:
+#
+#  GEMINI_API_KEY   — Google Gemini API key for AI replies
+#  OWNER_ID         — Your Facebook UID (100079889283302)
+#
+# ============================================================
