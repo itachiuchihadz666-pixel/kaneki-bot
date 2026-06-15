@@ -9,6 +9,10 @@ const playdl = require("play-dl");
 const YouTube = require("youtube-sr").default;
 const { generateUptimeImage } = require("./generate-uptime-image");
 const { generateCommandsMenuImage, generateCategoryDetailImage } = require("./generate-commands-image");
+const { generateAllMenuGifs } = require("./generate-menu-gif");
+
+// مخزن مسارات GIF الجاهزة { 1: path, 2: path, 3: path, 4: path }
+let menuGifPaths = {};
 
 const OWNER_ID = "100079889283302";
 const startTime = Date.now();
@@ -801,6 +805,15 @@ const attemptLogin = () => {
 
     appendLog("INFO", "BOT ONLINE ✅ | تم تحديث لوحات السيطرة بنجاح!");
 
+    // ============ [ توليد GIF القوائم في الخلفية عند بدء التشغيل ] ============
+    generateAllMenuGifs(false)
+      .then(paths => {
+        menuGifPaths = paths;
+        const ready = Object.values(paths).filter(Boolean).length;
+        appendLog("INFO", `🎨 GIF القوائم جاهزة: ${ready}/4 صفحات`);
+      })
+      .catch(e => appendLog("WARN", `فشل توليد GIF القوائم: ${e.message}`));
+
     api.listenMqtt(async (err, message) => {
       if (err) {
         appendLog("ERROR", `خطأ في الاستماع: ${JSON.stringify(err)}`);
@@ -1555,36 +1568,45 @@ const attemptLogin = () => {
         else if (mode === "ايقاف" || mode === "إيقاف") { antiOutSettings[threadID] = false; return sendAndCache("🔓 تم إيقاف نظام الحماية.", threadID); }
       }
 
-      // ============ [ /الاوامر 1-4 — يرسل صورة GIF + نص الأوامر كاملاً في نفس الرسالة ] ============
+      // ============ [ /الاوامر 1-4 — GIF متحركة تحتوي الأوامر مدمجة داخلها ] ============
       const gifPageMatch = body.match(/^\/الاوامر\s*([1-4])$/);
       if (body === "/الاوامر" || gifPageMatch) {
         const gifPage = gifPageMatch ? parseInt(gifPageMatch[1]) : 1;
         stats.commandsExecuted++;
-        reactToMessage(message.messageID, "📋");
-        await handleTypingAndDelay(threadID, 1000);
+        reactToMessage(message.messageID, "🎨");
+        await handleTypingAndDelay(threadID, 800);
 
-        // نصوص الأوامر الكاملة لكل صفحة — تظهر في الرسالة مباشرة
-        const pageTexts = {
-          1: `╔══════════════════════════╗\n    ⚡ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 1 ⚡\n╚══════════════════════════╝\n\n┌─〔 ⚙️ التحكم الأساسي 〕─────────────\n│  🟢 /تشغيل — تفعيل البوت\n│  🔴 /ايقاف — تعطيل البوت\n│  🔒 /قفل — للمالك والمشرفين فقط\n│  🔓 /فتح — إتاحة البوت للجميع\n│  🔐 /قفل_كامل — المالك فقط\n│  🔓 /فتح_كامل — إلغاء القفل الكامل\n│  💬 /محاكاة_الكتابة تشغيل/ايقاف\n│  👁️ /مراقبة تشغيل — رصد المجموعة\n│  🚫 /مراقبة ايقاف — إيقاف الرصد\n│  🔍 /اعطني الايدي — ايدي شخص بالرد\n│  ⏱️ /ابتيم — مدة تشغيل البوت\n└──────────────────────────────\n\n💡 /الاوامر 2 لصفحة التالية`,
-
-          2: `╔══════════════════════════╗\n    🛡️ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 2 🛡️\n╚══════════════════════════╝\n\n┌─〔 🛡️ الحماية وإدارة المجموعة 〕──────\n│  👑 هات ادمن — ترقيتك لـ Admin\n│  👑 !كانيكي ادمن [رابط] — إضافة مشرف\n│  🔻 !كانيكي نزع الادمن — نزع المشرف\n│  ☢️ /تدمير طرد — طرد كل المشرفين\n│  📉 /تدمير رتبة — نزع رتب الجميع\n│  🛡️ /حماية تشغيل/ايقاف — حماية المالك\n│  🚷 /طرد — طرد بالرد على رسالته\n│  🚷 /منع_المغادرة تشغيل/ايقاف\n│  🧹 /اصلاح — تنظيف الكنيات\n│  🗑️ /مسح — حذف رسالة البوت بالرد\n│  🧹 /مسح_الكل — سحب آخر رسائل\n│  🚪 /غادر — مغادرة المجموعة\n└──────────────────────────────\n\n💡 /الاوامر 3 لصفحة التالية`,
-
-          3: `╔══════════════════════════╗\n    🤖 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 3 🤖\n╚══════════════════════════╝\n\n┌─〔 🎬 الذكاء الاصطناعي والميديا 〕────\n│  🤖 ذكر كانيكي — رد ذكي بشخصية حقيقية\n│  🧠 امي كانيكي [سؤال] — سؤال مباشر\n│  ❓ /سؤال [سؤالك] — إجابة مفصّلة\n│  📌 بنترست [كلمة] — 5 صور بنترست\n│  📸 /افتار [اسم] — صور أنمي بجودة 2K\n│  🎵 /تحميل_صوت [اسم] — تحميل أغنية\n│  🔊 /صوت [النص] — نص إلى صوت عربي\n│  📛 /سيطرة_الاسم [اسم] — قفل اسم المجموعة\n│  👁️ /تثبيت_الكنية [اسم] — فرض الكنية\n│  👁️ /شارنغان [نص] — تغيير كنيات مؤقت\n│  📚 /مانغا — قراءة فصول المانجا\n│  🎬 /فيديو — عرض الفيديوهات\n└──────────────────────────────\n\n💡 /الاوامر 4 لصفحة التالية`,
-
-          4: `╔══════════════════════════╗\n    👑 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 4 👑\n╚══════════════════════════╝\n\n┌─〔 ⚡ الألعاب والأداء 〕──────────────\n│  🎮 /اسرع — لعبة الكلمات المقلوبة\n│  ☄️ /نيزك [نص] — رسالة تكرارية تلقائية\n│  🛑 /ايقاف_نيزك — إيقاف النيزك\n│  ⚡ /برق — سبام سريع جداً\n│  ⚡ /برق_صامت — سبام بدون إشعار\n│  🚫 /ايقاف_البرق — إيقاف البرق\n│  ⛈️ /رعد — رسالة ثابتة مجدولة\n│  🛑 /ايقاف_الرعد — إيقاف الرعد\n│  📊 /معلومات_المجموعة — إحصاءات\n│  ⚡ /تشغيل_المحرك — أداء أقصى\n│  🛑 /ايقاف_المحرك — وضع طبيعي\n└──────────────────────────────\n\n✨ Kaneki Bot — نظام متكامل ✨`,
-        };
-
-        const commandsText = pageTexts[gifPage] || pageTexts[1];
-
-        try {
-          const gifPath = await downloadMenuGif();
-          if (gifPath && fs.existsSync(gifPath)) {
-            api.sendMessage({ body: commandsText, attachment: fs.createReadStream(gifPath) }, threadID);
-            return;
+        // الحصول على GIF الجاهزة أو توليدها الآن إذا لم تكن جاهزة
+        let gifPath = menuGifPaths[gifPage];
+        if (!gifPath || !fs.existsSync(gifPath)) {
+          try {
+            const { generatePageGif } = require("./generate-menu-gif");
+            gifPath = await generatePageGif(gifPage);
+            menuGifPaths[gifPage] = gifPath;
+          } catch (genErr) {
+            appendLog("WARN", `فشل توليد GIF ${gifPage}: ${genErr.message}`);
           }
-        } catch (e) { appendLog("WARN", `GIF send error: ${e.message}`); }
-        // Fallback: text only
-        return sendAndCache(commandsText, threadID);
+        }
+
+        if (gifPath && fs.existsSync(gifPath)) {
+          // الأوامر مدمجة داخل الصورة — نص الرسالة مبسّط فقط
+          const labels = { 1: "التحكم الأساسي", 2: "الحماية والمجموعة", 3: "AI والميديا", 4: "الألعاب والأداء" };
+          const label = labels[gifPage] || "";
+          api.sendMessage({
+            body: `🔒 قائمة الأوامر ${gifPage} — ${label}`,
+            attachment: fs.createReadStream(gifPath),
+          }, threadID);
+          return;
+        }
+
+        // fallback نصي إذا فشل توليد GIF
+        const fallbacks = {
+          1: "📋 الأوامر 1: /تشغيل • /ايقاف • /قفل • /فتح • /مراقبة تشغيل • /اعطني الايدي • /ابتيم",
+          2: "📋 الأوامر 2: هات ادمن • !كانيكي ادمن • /تدمير طرد • /طرد • /اصلاح • /مسح • /غادر",
+          3: "📋 الأوامر 3: كانيكي [سؤال] • /سؤال • بنترست • /افتار • /تحميل_صوت • /صوت • /مانغا",
+          4: "📋 الأوامر 4: /اسرع • /نيزك • /برق • /رعد • /تشغيل_المحرك • /معلومات_المجموعة",
+        };
+        return sendAndCache(fallbacks[gifPage] || fallbacks[1], threadID);
       }
 
       if (body.startsWith("/شارنغان ")) {
