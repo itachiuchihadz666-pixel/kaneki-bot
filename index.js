@@ -105,6 +105,118 @@ const processedMessages = new Set();
 const outputLock = new Map();
 const removeAdminSetup = {};
 
+// ============ [ /اوامر — نظام قائمة الأوامر التفاعلية ] ============
+const menuMessages = new Map(); // messageID -> { threadID, timestamp }
+
+const KANEKI_GIF_URLS = [
+  "https://media.tenor.com/TXs6O7SdSzsAAAAC/tokyo-ghoul-kaneki.gif",
+  "https://media.tenor.com/pxmpqfhmmU0AAAAd/tokyo-ghoul-kaneki-ken.gif",
+  "https://media.tenor.com/BWVqoU5WFLEAAAAd/kaneki-tokyo-ghoul.gif",
+];
+
+const COMMANDS_CATEGORIES = [
+  {
+    num: 1, emoji: "🎛️", name: "التحكم الأساسي",
+    cmds: [
+      { cmd: "/تشغيل", desc: "تفعيل البوت بالكامل" },
+      { cmd: "/ايقاف", desc: "تعطيل البوت بالكامل" },
+      { cmd: "/قفل", desc: "قفل البوت للمشرفين فقط" },
+      { cmd: "/فتح", desc: "فتح البوت لجميع الأعضاء" },
+      { cmd: "/قفل_كامل", desc: "قفل كامل — المالك فقط" },
+      { cmd: "/فتح_كامل", desc: "إلغاء القفل الكامل" },
+    ]
+  },
+  {
+    num: 2, emoji: "🛡️", name: "إدارة المجموعة",
+    cmds: [
+      { cmd: "/طرد @شخص", desc: "طرد عضو من المجموعة" },
+      { cmd: "/غادر", desc: "مغادرة البوت للمجموعة" },
+      { cmd: "/مسح", desc: "حذف آخر رسالة للبوت" },
+      { cmd: "/مسح_الكل", desc: "سحب آخر 10 رسائل للبوت" },
+      { cmd: "/منع_المغادرة", desc: "تفعيل نظام منع المغادرة" },
+      { cmd: "/حماية", desc: "تفعيل حماية المالك" },
+      { cmd: "/اصلاح", desc: "تنظيف الكنيات العشوائية" },
+    ]
+  },
+  {
+    num: 3, emoji: "✏️", name: "التخصيص",
+    cmds: [
+      { cmd: "/سيطرة_الاسم [اسم]", desc: "قفل اسم المجموعة على الاسم المحدد" },
+      { cmd: "/ايقاف_السيطرة", desc: "إيقاف قفل الاسم" },
+      { cmd: "/تثبيت_الكنية [اسم]", desc: "فرض كنية على جميع الأعضاء" },
+      { cmd: "/ايقاف_التثبيت", desc: "إيقاف تثبيت الكنية" },
+      { cmd: "/شارنغان", desc: "تغيير كنيات الجميع مؤقتاً" },
+      { cmd: "/محاكاة_الكتابة", desc: "إظهار مؤشر الكتابة" },
+    ]
+  },
+  {
+    num: 4, emoji: "🎵", name: "الميديا",
+    cmds: [
+      { cmd: "بنترست [كلمة]", desc: "بحث وإرسال صورة من Pinterest" },
+      { cmd: "/تحميل_صوت [اسم]", desc: "تحميل وإرسال أغنية من YouTube" },
+      { cmd: "/صوت [نص]", desc: "تحويل نص إلى صوت (TTS)" },
+      { cmd: "/مانغا", desc: "تصفح وقراءة المانغا" },
+      { cmd: "/فيديو [اسم]", desc: "بحث وإرسال فيديو" },
+      { cmd: "/افتار [اسم]", desc: "إرسال صورة شخصية أنمي" },
+    ]
+  },
+  {
+    num: 5, emoji: "🤖", name: "الذكاء الاصطناعي",
+    cmds: [
+      { cmd: "أي سؤال", desc: "الرد الذكي تلقائياً على الأسئلة" },
+      { cmd: "كانيكي [سؤال]", desc: "مخاطبة البوت مباشرة بشخصية كانيكي" },
+      { cmd: "kaneki [سؤال]", desc: "نفس الأمر باللغة الإنجليزية" },
+      { cmd: "/صوت [نص]", desc: "قراءة النص بصوت عربي" },
+    ]
+  },
+  {
+    num: 6, emoji: "⚡", name: "المحرك والأداء",
+    cmds: [
+      { cmd: "/تشغيل_المحرك", desc: "وضع الأداء الأقصى — ردود فورية" },
+      { cmd: "/ايقاف_المحرك", desc: "إيقاف وضع الأداء الأقصى" },
+      { cmd: "/نيزك [رسالة]", desc: "إرسال رسالة متكررة بسرعة" },
+      { cmd: "/نيزك_صامت", desc: "إرسال نيزك بدون إشعار" },
+      { cmd: "/ايقاف_نيزك", desc: "إيقاف النيزك" },
+      { cmd: "/برق [رسالة]", desc: "سبام سريع جداً" },
+      { cmd: "/ايقاف_البرق", desc: "إيقاف البرق" },
+    ]
+  },
+  {
+    num: 7, emoji: "📊", name: "المعلومات والإحصاء",
+    cmds: [
+      { cmd: "/ابتيم", desc: "عرض وقت تشغيل البوت بصورة جميلة" },
+      { cmd: "/معلومات_المجموعة", desc: "معلومات المجموعة والمسؤولين" },
+      { cmd: "/نسخ_اسم", desc: "نسخ اسم المجموعة كنص" },
+    ]
+  },
+  {
+    num: 8, emoji: "👑", name: "إدارة البوت",
+    cmds: [
+      { cmd: "هات ادمن @شخص", desc: "إضافة مشرف للبوت" },
+      { cmd: "!كانيكي ادمن @شخص", desc: "إضافة مشرف للبوت" },
+      { cmd: "!كانيكي نزع الادمن @شخص", desc: "إزالة مشرف من البوت" },
+      { cmd: "/تدمير طرد", desc: "طرد جميع مشرفي الفيسبوك" },
+      { cmd: "/تدمير رتبة", desc: "نزع رتبة جميع المشرفين" },
+    ]
+  },
+  {
+    num: 9, emoji: "🎮", name: "الألعاب والتسلية",
+    cmds: [
+      { cmd: "/اسرع", desc: "لعبة من يكتب الكلمة أسرع" },
+      { cmd: "/اوامر", desc: "عرض قائمة الأوامر (أنت هنا! 😄)" },
+    ]
+  },
+  {
+    num: 10, emoji: "💬", name: "الأوامر المخصصة",
+    cmds: [
+      { cmd: "أوامر مخصصة", desc: "أوامر تضيفها عبر لوحة التحكم الويب" },
+      { cmd: "المتغيرات: {اسم}", desc: "اسم المرسل تلقائياً" },
+      { cmd: "المتغيرات: {وقت}", desc: "الوقت الحالي تلقائياً" },
+      { cmd: "المتغيرات: {ساعات_التشغيل}", desc: "ساعات تشغيل البوت" },
+    ]
+  },
+];
+
 const answers = {
   "من انت": "ヽ.ꜝ👑押NᎬ淇 ぐ愛",
   "كيف حالك": "بخير 👍",
@@ -700,6 +812,21 @@ const attemptLogin = () => {
         }
         return Promise.resolve();
       };
+
+      // ============ [ /اوامر — Menu Reply Detection ] ============
+      if (message.messageReply && menuMessages.has(message.messageReply.messageID)) {
+        const num = parseInt(body.trim());
+        if (!isNaN(num) && num >= 1 && num <= COMMANDS_CATEGORIES.length) {
+          const cat = COMMANDS_CATEGORIES[num - 1];
+          const line = "─".repeat(32);
+          let msg = `${cat.emoji}【 ${cat.name} 】\n${line}\n\n`;
+          cat.cmds.forEach((c, i) => {
+            msg += `${i + 1}. ${c.cmd}\n   ↳ ${c.desc}\n\n`;
+          });
+          msg += `${line}\n💡 ردّ على رسالة القائمة برقم آخر (1-${COMMANDS_CATEGORIES.length}) لتصفح باقي الأقسام`;
+          return sendAndCache(msg, threadID);
+        }
+      }
 
       // Lightning setup flow
       // ============ [ /رعد — Setup Flow ] ============
@@ -1471,6 +1598,52 @@ const attemptLogin = () => {
       }
 
       if (body === "/غادر") { stats.commandsExecuted++; sendAndCache("🚪 مغادرة المجموعة...", threadID, () => { api.removeUserFromGroup(api.getCurrentUserID(), threadID); }); return; }
+
+      // ============ [ /اوامر — القائمة التفاعلية بـ GIF ] ============
+      if (body === "/اوامر") {
+        stats.commandsExecuted++;
+        reactToMessage(message.messageID, "📋");
+
+        const menuText =
+`╭━━━━━〔 🐉 KANEKI BOT 🐉 〕━━━━━╮
+┃       📋 قـائـمـة الأوامـر الكاملة       ┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+
+${COMMANDS_CATEGORIES.map(c => `  ${c.num}. ${c.emoji} ${c.name}`).join("\n")}
+
+╭────────────────────────────╮
+┃  💡 ردّ على هذه الرسالة برقم  ┃
+┃     (1-${COMMANDS_CATEGORIES.length}) لعرض تفاصيل القسم     ┃
+╰────────────────────────────╯`;
+
+        // Try to download and send Kaneki GIF
+        const gifUrl = KANEKI_GIF_URLS[Math.floor(Math.random() * KANEKI_GIF_URLS.length)];
+        try {
+          const { default: axiosLib } = await import("axios");
+          const gifResp = await axiosLib.get(gifUrl, { responseType: "stream", timeout: 10000 });
+          const tmpGifPath = path.join(__dirname, "downloads", `kaneki_menu_${Date.now()}.gif`);
+          if (!fs.existsSync(path.join(__dirname, "downloads"))) fs.mkdirSync(path.join(__dirname, "downloads"), { recursive: true });
+          const wstream = fs.createWriteStream(tmpGifPath);
+          await new Promise((res, rej) => { gifResp.data.pipe(wstream); wstream.on("finish", res); wstream.on("error", rej); });
+          api.sendMessage({ body: menuText, attachment: fs.createReadStream(tmpGifPath) }, threadID, (err, info) => {
+            try { if (fs.existsSync(tmpGifPath)) fs.unlinkSync(tmpGifPath); } catch {}
+            if (!err && info && info.messageID) {
+              menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
+              // Expire after 1 hour
+              setTimeout(() => menuMessages.delete(info.messageID), 3600000);
+            }
+          });
+        } catch (gifErr) {
+          // Fallback: send text-only menu
+          api.sendMessage(menuText, threadID, (err, info) => {
+            if (!err && info && info.messageID) {
+              menuMessages.set(info.messageID, { threadID, timestamp: Date.now() });
+              setTimeout(() => menuMessages.delete(info.messageID), 3600000);
+            }
+          });
+        }
+        return;
+      }
 
       // ============ [ الأوامر المخصصة — Custom Commands ] ============
       const customCmds = loadCustomCommands();
