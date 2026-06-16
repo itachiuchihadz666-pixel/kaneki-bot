@@ -1,0 +1,27 @@
+{
+  "appId": "com.kaneki.bot.dashboard",
+  "appName": "Kaneki Bot",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": "release.keystore",
+      "keystoreAlias": "kaneki"
+    }
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#020812",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "Dark",
+      "backgroundColor": "#020812"
+    }
+  }
+}
