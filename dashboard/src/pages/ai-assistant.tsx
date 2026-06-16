@@ -1,274 +1,366 @@
 import { useState, useRef, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { BrainCircuit, Send, RefreshCw, Upload, Sparkles, User, Bot, Paperclip, X, Code2, Plus } from "lucide-react";
+import {
+  BrainCircuit, Send, RefreshCw, Upload, Sparkles, User, Bot,
+  Paperclip, X, Code2, ChevronDown, ChevronUp, Zap, Layers, Hash,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+
+type AIModel = "gemini" | "claude" | "openai" | "groq" | "multi";
+
+interface ModelInfo { id: AIModel; label: string; badge: string; color: string; desc: string }
+const MODELS: ModelInfo[] = [
+  { id: "gemini", label: "Gemini",  badge: "✨", color: "from-blue-500/20 to-cyan-500/10 border-blue-500/40 text-blue-300",   desc: "Google · سريع ودقيق" },
+  { id: "claude", label: "Claude",  badge: "🟠", color: "from-orange-500/20 to-amber-500/10 border-orange-500/40 text-orange-300", desc: "Anthropic · إبداعي" },
+  { id: "openai", label: "ChatGPT", badge: "🟢", color: "from-emerald-500/20 to-green-500/10 border-emerald-500/40 text-emerald-300", desc: "OpenAI · شامل" },
+  { id: "groq",   label: "Groq",    badge: "⚡", color: "from-purple-500/20 to-violet-500/10 border-purple-500/40 text-purple-300",  desc: "LLaMA · الأسرع" },
+  { id: "multi",  label: "Multi-AI", badge: "🤝", color: "from-primary/20 to-indigo-500/10 border-primary/40 text-primary",        desc: "كل الذكاءات معاً" },
+];
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  model?: AIModel;
   file?: { name: string; type: string };
 }
 
 const QUICK_PROMPTS = [
-  "أضف أمر جديد للبوت يرد برسالة ترحيب",
-  "كيف أجعل البوت يحظر كلمات معينة؟",
-  "أضف أمر /معلومات يعرض إحصاءات الأعضاء",
-  "كيف أعدّل الرد التلقائي لكانيكي؟",
-  "أضف أمر يرسل صورة عشوائية من المكتبة",
+  "أضف أمر جديد /ترحيب يرسل رسالة ترحيب بالأعضاء الجدد",
+  "أضف فلتر يحذف أي رسالة تحتوي على روابط",
+  "أضف أمر /تصويت ينشئ استفتاء في المجموعة",
+  "كيف أجعل البوت يرد بصوت TTS على الأوامر؟",
+  "أضف أمر /سحب يختار عضواً عشوائياً للفوز",
 ];
 
 export default function AIAssistant() {
   const { toast } = useToast();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content: "أهلاً 👋 أنا مساعد تطوير كانيكي بوت. يمكنني مساعدتك في:\n\n• إضافة أوامر جديدة للبوت\n• تعديل السلوك الحالي\n• رفع ملفات وربطها بالأوامر\n• شرح أي جزء من الكود\n\nاكتب ما تريد!",
-      timestamp: new Date(),
-    },
-  ]);
-  const [input, setInput] = useState("");
+  const [model, setModel]   = useState<AIModel>("gemini");
+  const [aiStatus, setAiStatus] = useState<Record<string, boolean>>({});
+  const [messages, setMessages] = useState<Message[]>([{
+    role: "assistant",
+    content: "أهلاً 👋 أنا مجلس الذكاء الاصطناعي لتطوير كانيكي بوت.\n\n• اختر الذكاء الاصطناعي المناسب من الأعلى\n• أو استخدم **Multi-AI** ليردوا جميعاً\n• ارفع صورة أو فيديو وأخبرني بأي أمر تريد إرساله فيه\n\nاكتب أي طلب!",
+    timestamp: new Date(),
+  }]);
+  const [input, setInput]   = useState("");
   const [loading, setLoading] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [fileDesc, setFileDesc] = useState("");
-  const [showFileUpload, setShowFileUpload] = useState(false);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploading, setUploading]   = useState(false);
+  const [file, setFile]             = useState<File | null>(null);
+  const [fileName, setFileName]     = useState("");
+  const [fileCmd, setFileCmd]       = useState("");
+  const [fileDesc, setFileDesc]     = useState("");
+  const bottomRef   = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    fetch(`${BASE}/api/ai/status`)
+      .then(r => r.json())
+      .then(d => setAiStatus(d as Record<string, boolean>))
+      .catch(() => {});
+  }, []);
+
+  const currentModel = MODELS.find(m => m.id === model)!;
 
   const sendMessage = async (content?: string) => {
     const text = (content ?? input).trim();
     if (!text || loading) return;
-
-    const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
-    setMessages(prev => [...prev, userMsg]);
+    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), model };
+    setMessages(p => [...p, userMsg]);
     setInput("");
     setLoading(true);
-
     try {
-      const history = messages.slice(-10).map(m => ({ role: m.role, content: m.content }));
-      const res = await fetch(`${BASE}/api/ai/chat`, {
+      const history = messages.slice(-12).map(m => ({ role: m.role, content: m.content }));
+      const r = await fetch(`${BASE}/api/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history }),
+        body: JSON.stringify({ message: text, history, model }),
       });
-
-      if (!res.ok) throw new Error("فشل الاتصال بالذكاء الاصطناعي");
-      const data = await res.json() as { reply: string };
-      const aiMsg: Message = { role: "assistant", content: data.reply, timestamp: new Date() };
-      setMessages(prev => [...prev, aiMsg]);
+      if (!r.ok) throw new Error("فشل الاتصال");
+      const d = await r.json() as { reply: string };
+      setMessages(p => [...p, { role: "assistant", content: d.reply, timestamp: new Date(), model }]);
     } catch (e) {
-      toast({ title: "خطأ في الذكاء الاصطناعي", description: String(e), variant: "destructive" });
-      setMessages(prev => [...prev, {
-        role: "assistant",
-        content: "⚠️ تعذّر الاتصال بالذكاء الاصطناعي. تأكد من إعداد GEMINI_API_KEY.",
-        timestamp: new Date(),
-      }]);
+      toast({ title: "خطأ", description: String(e), variant: "destructive" });
+      setMessages(p => [...p, { role: "assistant", content: "⚠️ فشل الاتصال بالذكاء الاصطناعي.", timestamp: new Date() }]);
     }
     setLoading(false);
   };
 
-  const handleFileUpload = async () => {
+  const handleUpload = async () => {
     if (!file) return;
-    setUploadingFile(true);
+    setUploading(true);
     try {
+      const finalName = fileName.trim() || file.name;
+      const ext = file.name.includes(".") ? `.${file.name.split(".").pop()}` : "";
+      const savedName = finalName.includes(".") ? finalName : `${finalName}${ext}`;
+
       const formData = new FormData();
-      formData.append("file", file);
+      const renamed = new File([file], savedName, { type: file.type });
+      formData.append("file", renamed);
       formData.append("folder", "bot_library");
-      const res = await fetch(`${BASE}/api/bot/files`, { method: "POST", body: formData });
-      if (!res.ok) throw new Error("فشل الرفع");
+      const r = await fetch(`${BASE}/api/bot/files`, { method: "POST", body: formData });
+      if (!r.ok) throw new Error("فشل الرفع");
 
-      const aiPrompt = fileDesc
-        ? `لقد رفعت ملف اسمه "${file.name}" (${file.type}). الوصف: ${fileDesc}. كيف أربط هذا الملف بأمر في البوت؟`
-        : `لقد رفعت ملف اسمه "${file.name}" (${file.type}). ساعدني في إضافة أمر للبوت يستخدم هذا الملف.`;
+      const cmdPart = fileCmd.trim() ? `\n\nالأمر الذي يجب أن يرسل هذا الملف: **${fileCmd.trim()}**` : "";
+      const descPart = fileDesc.trim() ? `\nالوصف: ${fileDesc.trim()}` : "";
+      const prompt = `رفعت ملف باسم "${savedName}" (${file.type}).${descPart}${cmdPart}\nاكتب كود يضيف هذا الأمر للبوت مع إرسال الملف.`;
 
-      const userMsg: Message = {
-        role: "user",
-        content: aiPrompt,
-        timestamp: new Date(),
-        file: { name: file.name, type: file.type },
-      };
-      setMessages(prev => [...prev, userMsg]);
-      setFile(null);
-      setFileDesc("");
-      setShowFileUpload(false);
+      const userMsg: Message = { role: "user", content: prompt, timestamp: new Date(), file: { name: savedName, type: file.type } };
+      setMessages(p => [...p, userMsg]);
+      setFile(null); setFileName(""); setFileCmd(""); setFileDesc(""); setShowUpload(false);
       setLoading(true);
 
       const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
-      const aiRes = await fetch(`${BASE}/api/ai/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: aiPrompt, history }),
+      const aiR = await fetch(`${BASE}/api/ai/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: prompt, history, model }),
       });
-      if (aiRes.ok) {
-        const data = await aiRes.json() as { reply: string };
-        setMessages(prev => [...prev, { role: "assistant", content: data.reply, timestamp: new Date() }]);
+      if (aiR.ok) {
+        const d = await aiR.json() as { reply: string };
+        setMessages(p => [...p, { role: "assistant", content: d.reply, timestamp: new Date(), model }]);
       }
-      toast({ title: "✅ رُفع الملف بنجاح", description: file.name });
+      toast({ title: "✅ رُفع الملف بنجاح", description: savedName });
     } catch (e) {
-      toast({ title: "خطأ", description: String(e), variant: "destructive" });
+      toast({ title: "خطأ في الرفع", description: String(e), variant: "destructive" });
     }
-    setUploadingFile(false);
-    setLoading(false);
+    setUploading(false); setLoading(false);
   };
 
-  const clearChat = () => {
-    setMessages([{
-      role: "assistant",
-      content: "تم مسح المحادثة. كيف يمكنني مساعدتك؟ 🔧",
-      timestamp: new Date(),
-    }]);
-  };
+  const clearChat = () => setMessages([{ role: "assistant", content: "تم مسح المحادثة 🔧 كيف يمكنني مساعدتك؟", timestamp: new Date() }]);
+
+  const modelColor = (m?: AIModel) => MODELS.find(x => x.id === m)?.color ?? "";
+
+  function renderContent(text: string) {
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    return parts.map((part, i) =>
+      part.startsWith("```") ? (
+        <pre key={i} className="bg-black/50 rounded-xl p-4 text-xs font-mono text-green-300 overflow-x-auto border border-white/8 my-2 whitespace-pre-wrap">
+          <div className="flex items-center gap-1.5 mb-2.5 pb-2 border-b border-white/10 text-[10px] text-zinc-500 uppercase tracking-wider">
+            <Code2 className="h-3 w-3" /> javascript
+          </div>
+          {part.replace(/^```\w*\n?/, "").replace(/```$/, "")}
+        </pre>
+      ) : (
+        <span key={i} className="whitespace-pre-wrap"
+          dangerouslySetInnerHTML={{ __html: part.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/---/g, '<hr class="border-white/10 my-3"/>') }} />
+      )
+    );
+  }
+
+  const isActive = (id: string) => aiStatus[id] === true;
+  const any = Object.values(aiStatus).some(Boolean);
 
   return (
-    <div className="space-y-4 p-1 h-full flex flex-col" dir="rtl">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-3 h-full flex flex-col" dir="rtl">
+
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 bg-primary/10 rounded-lg flex items-center justify-center border border-primary/20">
-            <BrainCircuit className="h-6 w-6 text-primary" />
+          <div className="h-10 w-10 bg-gradient-to-br from-primary/20 to-indigo-500/10 rounded-xl border border-primary/30 flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.15)]">
+            <BrainCircuit className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h2 className="text-lg font-bold font-mono uppercase tracking-tight">AI Developer</h2>
-            <p className="text-xs text-muted-foreground font-mono">مساعد تطوير البوت بالذكاء الاصطناعي</p>
+            <h2 className="text-sm font-bold font-mono uppercase tracking-widest text-white">AI Council</h2>
+            <p className="text-[10px] text-muted-foreground font-mono">مجلس الذكاء الاصطناعي · تطوير البوت</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setShowFileUpload(v => !v)}
-            className={cn("font-mono text-xs border-border/50 gap-1.5", showFileUpload && "bg-primary/10 border-primary/40 text-primary")}>
+        <div className="flex gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => setShowUpload(v => !v)}
+            className={cn("font-mono text-[11px] h-8 gap-1.5 border-border/40", showUpload && "bg-primary/10 border-primary/40 text-primary")}>
             <Paperclip className="h-3 w-3" /> رفع ملف
           </Button>
-          <Button size="sm" variant="outline" onClick={clearChat}
-            className="font-mono text-xs border-border/50 gap-1.5">
+          <Button size="sm" variant="outline" onClick={clearChat} className="font-mono text-[11px] h-8 gap-1.5 border-border/40">
             <RefreshCw className="h-3 w-3" /> مسح
           </Button>
         </div>
       </div>
 
-      {/* File Upload Panel */}
-      {showFileUpload && (
-        <Card className="border-primary/20 bg-card/50 backdrop-blur">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-mono uppercase text-muted-foreground flex items-center gap-2">
-              <Upload className="h-3.5 w-3.5 text-primary" /> رفع ملف + ربطه بأمر
-              <button onClick={() => setShowFileUpload(false)} className="mr-auto text-muted-foreground hover:text-white">
-                <X className="h-3 w-3" />
+      {/* ── Model Selector ── */}
+      <div className="flex gap-1.5 flex-wrap">
+        {MODELS.map(m => {
+          const active = model === m.id;
+          const available = m.id === "multi" ? any : isActive(m.id);
+          return (
+            <button key={m.id} onClick={() => setModel(m.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-mono border transition-all",
+                active
+                  ? `bg-gradient-to-r ${m.color} shadow-sm scale-[1.02]`
+                  : "border-border/30 bg-background/40 text-zinc-500 hover:border-border/60 hover:text-zinc-300"
+              )}>
+              <span>{m.badge}</span>
+              <span>{m.label}</span>
+              {!available && <span className="h-1.5 w-1.5 rounded-full bg-zinc-600 border border-zinc-500" />}
+              {available && <span className="h-1.5 w-1.5 rounded-full bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.6)]" />}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Active model hint ── */}
+      <div className={cn(
+        "flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] font-mono bg-gradient-to-r",
+        currentModel.color
+      )}>
+        <Zap className="h-3 w-3 shrink-0" />
+        <span className="font-semibold">{currentModel.badge} {currentModel.label}</span>
+        <span className="opacity-70">— {currentModel.desc}</span>
+        {currentModel.id === "multi" && <span className="mr-auto opacity-60">({Object.values(aiStatus).filter(Boolean).length} ذكاء نشط)</span>}
+      </div>
+
+      {/* ── File Upload Panel ── */}
+      {showUpload && (
+        <Card className="border-primary/20 bg-gradient-to-br from-card/80 to-primary/5 backdrop-blur shadow-xl">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground uppercase tracking-wider">
+                <Upload className="h-3 w-3 text-primary" /> رفع ملف وربطه بأمر
+              </div>
+              <button onClick={() => setShowUpload(false)} className="text-zinc-500 hover:text-white p-1 rounded">
+                <X className="h-3.5 w-3.5" />
               </button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <input ref={fileInputRef} type="file" onChange={e => setFile(e.target.files?.[0] ?? null)} className="hidden" />
+            </div>
+
+            {/* Drop zone */}
+            <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*,.pdf,.gif"
+              onChange={e => { const f = e.target.files?.[0]; if (f) { setFile(f); setFileName(f.name.replace(/\.[^.]+$/, "")); } }}
+              className="hidden" />
             <div onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-border/40 hover:border-primary/40 rounded-lg p-5 text-center cursor-pointer transition-colors hover:bg-primary/5">
+              className={cn(
+                "border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all",
+                file ? "border-primary/50 bg-primary/5" : "border-border/30 hover:border-primary/30 hover:bg-primary/5"
+              )}>
               {file ? (
                 <div className="flex items-center justify-center gap-2 text-sm font-mono text-primary">
                   <Paperclip className="h-4 w-4" />
                   <span>{file.name}</span>
-                  <span className="text-muted-foreground text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
+                  <span className="text-zinc-500 text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
                 </div>
               ) : (
                 <div className="space-y-1">
-                  <Upload className="h-6 w-6 text-muted-foreground mx-auto" />
-                  <p className="text-xs font-mono text-muted-foreground">اضغط لاختيار ملف (صورة، فيديو، صوت، PDF)</p>
+                  <Upload className="h-7 w-7 text-zinc-600 mx-auto" />
+                  <p className="text-xs font-mono text-zinc-500">اضغط لاختيار صورة · فيديو · صوت · PDF</p>
                 </div>
               )}
             </div>
-            <Textarea
-              value={fileDesc}
-              onChange={e => setFileDesc(e.target.value)}
-              placeholder="صف كيف تريد استخدام هذا الملف في البوت (اختياري)..."
-              className="min-h-[60px] bg-background/50 border-border/50 resize-none text-sm"
-              dir="rtl"
-            />
-            <Button onClick={handleFileUpload} disabled={!file || uploadingFile}
-              className="w-full font-mono text-xs gap-2 h-9">
-              {uploadingFile ? <><RefreshCw className="h-3 w-3 animate-spin" /> جاري الرفع...</> : <><Plus className="h-3 w-3" /> ارفع واطلب من AI</>}
+
+            {/* Rename field */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono text-muted-foreground flex items-center gap-1.5 uppercase tracking-wider">
+                <Hash className="h-2.5 w-2.5" /> اسم الملف المحفوظ (أي طول)
+              </label>
+              <Input value={fileName} onChange={e => setFileName(e.target.value)}
+                placeholder="مثال: ترحيب_المجموعة أو welcome_banner"
+                className="h-9 bg-background/50 border-border/40 font-mono text-sm" dir="ltr" />
+            </div>
+
+            {/* Command field */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono text-muted-foreground flex items-center gap-1.5 uppercase tracking-wider">
+                <Layers className="h-2.5 w-2.5" /> الأمر الذي يرسل هذا الملف
+              </label>
+              <Input value={fileCmd} onChange={e => setFileCmd(e.target.value)}
+                placeholder="مثال: /ترحيب أو /صورة_اليوم أو /بانر"
+                className="h-9 bg-background/50 border-border/40 font-mono text-sm" dir="rtl" />
+            </div>
+
+            {/* Description */}
+            <Textarea value={fileDesc} onChange={e => setFileDesc(e.target.value)}
+              placeholder="وصف إضافي اختياري (مثلاً: يُرسل عند دخول عضو جديد)"
+              className="min-h-[56px] bg-background/50 border-border/40 resize-none text-sm font-mono" dir="rtl" />
+
+            <Button onClick={handleUpload} disabled={!file || uploading}
+              className="w-full font-mono text-xs gap-2 h-9 bg-primary/90 hover:bg-primary shadow-[0_0_20px_rgba(59,130,246,0.2)]">
+              {uploading ? <><RefreshCw className="h-3 w-3 animate-spin" /> جاري الرفع...</>
+                : <><Upload className="h-3 w-3" /> ارفع + اطلب من AI</>}
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* Quick Prompts */}
+      {/* ── Quick Prompts ── */}
       {messages.length <= 1 && (
         <div className="flex gap-2 flex-wrap">
           {QUICK_PROMPTS.map((p, i) => (
             <button key={i} onClick={() => sendMessage(p)}
-              className="text-[11px] font-mono px-3 py-1.5 rounded border border-border/30 bg-background/30 text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-colors">
-              <Sparkles className="h-2.5 w-2.5 inline ml-1" />{p}
+              className="text-[10px] font-mono px-3 py-1.5 rounded-lg border border-border/25 bg-background/30 text-zinc-500 hover:border-primary/30 hover:text-primary hover:bg-primary/5 transition-all">
+              <Sparkles className="h-2.5 w-2.5 inline ml-1 opacity-60" />{p}
             </button>
           ))}
         </div>
       )}
 
-      {/* Messages */}
-      <Card className="flex-1 border-border/50 bg-card/50 backdrop-blur min-h-[350px]">
-        <CardContent className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
-          {messages.map((msg, i) => (
-            <div key={i} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "flex-row")}>
-              <div className={cn(
-                "shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs",
-                msg.role === "user"
-                  ? "bg-primary/20 text-primary border border-primary/30"
-                  : "bg-zinc-800 text-zinc-300 border border-white/10"
-              )}>
-                {msg.role === "user" ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
-              </div>
-              <div className={cn(
-                "max-w-[85%] rounded-xl px-4 py-3 text-sm leading-relaxed",
-                msg.role === "user"
-                  ? "bg-primary/15 border border-primary/20 text-white rounded-tl-none"
-                  : "bg-white/5 border border-white/8 text-zinc-200 rounded-tr-none"
-              )}>
-                {msg.file && (
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-primary/70 mb-2 pb-2 border-b border-white/10">
-                    <Paperclip className="h-2.5 w-2.5" /> {msg.file.name}
-                  </div>
-                )}
-                {msg.content.includes("```") ? (
-                  <div className="space-y-2">
-                    {msg.content.split(/(```[\s\S]*?```)/g).map((part, j) =>
-                      part.startsWith("```") ? (
-                        <pre key={j} className="bg-black/40 rounded-lg p-3 text-xs font-mono text-green-300 overflow-x-auto border border-white/10 whitespace-pre-wrap">
-                          <div className="flex items-center gap-1.5 mb-2 text-muted-foreground">
-                            <Code2 className="h-3 w-3" />
-                            <span className="text-[10px]">كود</span>
-                          </div>
-                          {part.replace(/```\w*\n?/, "").replace(/```$/, "")}
-                        </pre>
-                      ) : (
-                        <p key={j} className="whitespace-pre-wrap">{part}</p>
-                      )
+      {/* ── Messages ── */}
+      <Card className="flex-1 border-border/30 bg-gradient-to-b from-card/60 to-background/40 backdrop-blur min-h-[300px] shadow-xl">
+        <CardContent className="p-4 space-y-3 max-h-[480px] overflow-y-auto scrollbar-thin">
+          {messages.map((msg, i) => {
+            const mColor = modelColor(msg.model);
+            return (
+              <div key={i} className={cn("flex gap-2.5", msg.role === "user" ? "flex-row-reverse" : "flex-row")}>
+                {/* Avatar */}
+                <div className={cn(
+                  "shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs border shadow-sm mt-0.5",
+                  msg.role === "user"
+                    ? "bg-primary/15 border-primary/30 text-primary"
+                    : "bg-zinc-800/80 border-white/10 text-zinc-400"
+                )}>
+                  {msg.role === "user" ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
+                </div>
+
+                <div className={cn("max-w-[86%] space-y-1", msg.role === "user" ? "items-end" : "items-start", "flex flex-col")}>
+                  {/* model tag */}
+                  {msg.role === "assistant" && msg.model && (
+                    <span className={cn("text-[9px] font-mono px-2 py-0.5 rounded-full border bg-gradient-to-r inline-block", mColor)}>
+                      {MODELS.find(x => x.id === msg.model)?.badge} {MODELS.find(x => x.id === msg.model)?.label}
+                    </span>
+                  )}
+
+                  {/* Bubble */}
+                  <div className={cn(
+                    "rounded-2xl px-4 py-3 text-sm leading-relaxed border text-[13px]",
+                    msg.role === "user"
+                      ? "bg-gradient-to-br from-primary/20 to-indigo-500/10 border-primary/25 text-white rounded-tl-md"
+                      : "bg-white/4 border-white/8 text-zinc-200 rounded-tr-md"
+                  )}>
+                    {msg.file && (
+                      <div className="flex items-center gap-1.5 text-[10px] font-mono text-primary/60 mb-2 pb-2 border-b border-white/10">
+                        <Paperclip className="h-2.5 w-2.5" /> {msg.file.name}
+                      </div>
                     )}
+                    <div className="prose-invert prose-sm max-w-none">
+                      {renderContent(msg.content)}
+                    </div>
+                    <p className="text-[9px] text-muted-foreground/40 mt-2 font-mono text-left">
+                      {msg.timestamp.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                    </p>
                   </div>
-                ) : (
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
-                )}
-                <p className="text-[10px] text-muted-foreground/50 mt-2 font-mono">
-                  {msg.timestamp.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
-                </p>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+
           {loading && (
-            <div className="flex gap-3">
-              <div className="shrink-0 h-7 w-7 rounded-full flex items-center justify-center bg-zinc-800 border border-white/10">
-                <Bot className="h-3.5 w-3.5 text-zinc-300" />
+            <div className="flex gap-2.5">
+              <div className="shrink-0 h-7 w-7 rounded-full bg-zinc-800/80 border border-white/10 flex items-center justify-center mt-0.5">
+                <Bot className="h-3 w-3 text-zinc-400" />
               </div>
-              <div className="bg-white/5 border border-white/8 rounded-xl rounded-tr-none px-4 py-3">
+              <div className="bg-white/4 border border-white/8 rounded-2xl rounded-tr-md px-4 py-3">
                 <div className="flex gap-1.5 items-center h-5">
                   {[0, 1, 2].map(d => (
-                    <span key={d} className="h-1.5 w-1.5 rounded-full bg-primary/60 animate-bounce"
-                      style={{ animationDelay: `${d * 0.15}s` }} />
+                    <span key={d} className="h-1.5 w-1.5 rounded-full bg-primary/70 animate-bounce"
+                      style={{ animationDelay: `${d * 0.18}s` }} />
                   ))}
+                  <span className="text-[10px] font-mono text-zinc-600 ml-2">
+                    {currentModel.badge} {currentModel.label} يفكر...
+                  </span>
                 </div>
               </div>
             </div>
@@ -277,19 +369,14 @@ export default function AIAssistant() {
         </CardContent>
       </Card>
 
-      {/* Input */}
+      {/* ── Input ── */}
       <div className="flex gap-2">
-        <Textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
+        <Textarea value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder="اكتب طلبك... (Enter للإرسال، Shift+Enter لسطر جديد)"
-          className="flex-1 min-h-[52px] max-h-[120px] bg-background/50 border-border/50 resize-none text-sm"
-          dir="rtl"
-          disabled={loading}
-        />
+          placeholder={`اكتب طلبك لـ ${currentModel.badge} ${currentModel.label}... (Enter إرسال · Shift+Enter سطر جديد)`}
+          className="flex-1 min-h-[52px] max-h-[120px] bg-background/50 border-border/40 resize-none text-sm font-mono" dir="rtl" disabled={loading} />
         <Button onClick={() => sendMessage()} disabled={loading || !input.trim()}
-          className="h-full px-4 font-mono gap-1.5">
+          className="h-full px-4 bg-primary hover:bg-primary/90 shadow-[0_0_20px_rgba(59,130,246,0.25)] transition-shadow hover:shadow-[0_0_30px_rgba(59,130,246,0.4)]">
           {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
       </div>
