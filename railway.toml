@@ -10,8 +10,6 @@ NPM_CONFIG_PRODUCTION = "false"
 startCommand = "node index.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 15
-healthcheckPath = "/"
-healthcheckTimeout = 300
 
 # ============================================================
 #  Environment Variables — set these in Railway dashboard:
