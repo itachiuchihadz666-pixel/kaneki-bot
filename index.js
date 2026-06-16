@@ -13,6 +13,8 @@ const { generateAllMenuGifs } = require("./generate-menu-gif");
 
 // مخزن مسارات GIF الجاهزة { 1: path, 2: path, 3: path, 4: path }
 let menuGifPaths = {};
+// جلسات وضع المطور { threadID: { active, history } }
+const devSessions = {};
 
 const OWNER_ID = "100079889283302";
 const startTime = Date.now();
@@ -429,8 +431,11 @@ const getAIReply = async (userMessage, senderName = "", longAnswer = false, thre
 
     if (!process.env.GEMINI_API_KEY) {
       const noKeyFallbacks = [
-        "وضّح أكثر 🤔", "مو فاهم قصدك 😅", "شرّح لي 🙄",
-        "وش تقصد بالضبط؟", "ها؟ قول بشكل واضح", "اكتب بشكل مفهوم عشان أرد"
+        "ههه شو تبي بالضبط؟", "والله ما فهمت قصدك", "يلا قول واضح عشان أرد",
+        "اكتب بشكل مفهوم وأرد عليك", "ها؟ 😏 شرّح أكثر", "مدري، وضّح الفكرة",
+        "ايه؟ قصدك إيش بالضبط", "لا بعد ما فهمت ههه", "والله مو واضح كلامك",
+        "اكتب مرة ثانية بشكل أوضح", "شو هذا الكلام 😅 وضّح", "طيب شرّح من البداية",
+        "خخخ مو فاهم، اكتب بطريقة ثانية", "بصراحة مو عارف قصدك ههه",
       ];
       return pick(noKeyFallbacks);
     }
@@ -754,19 +759,19 @@ const attemptLogin = () => {
       fs.writeFileSync(APPSTATE_FILE, JSON.stringify(api.getAppState(), null, 2));
     } catch (saveErr) {}
 
-    // Auto-save cookies every hour
+    // Auto-save cookies every 30 minutes to keep session alive
     const cookieSaveTimer = setInterval(() => {
       try {
         const freshAppState = api.getAppState();
         if (freshAppState && freshAppState.length > 0) {
           fs.writeFileSync(APPSTATE_FILE, JSON.stringify(freshAppState, null, 2));
           cookieLastSaved = new Date().toISOString();
-          appendLog("INFO", "⚙️ [نظام الاستقرار] تم تحديث وحفظ ملف الكوكيز تلقائياً.");
+          appendLog("INFO", "🍪 تم تحديث وحفظ ملف الكوكيز تلقائياً.");
         }
       } catch (autoSaveErr) {
         appendLog("WARN", `فشل تحديث الكوكيز التلقائي: ${autoSaveErr.message}`);
       }
-    }, 60 * 60 * 1000);
+    }, 30 * 60 * 1000);
 
     // Save stats every 5 minutes
     const statsSaveTimer = setInterval(saveStats, 5 * 60 * 1000);
@@ -872,9 +877,7 @@ const attemptLogin = () => {
         if (lockThreadName[threadID]) {
           const newName = message.logMessageData.name || message.logMessageData.threadName;
           if (newName && newName !== lockThreadName[threadID]) {
-            api.setTitle(lockThreadName[threadID], threadID, (titleErr) => {
-              if (!titleErr) sendAndCache(`⚠️ [ رادار السيطرة ] تمت استعادة الاسم الأصلي فوراً.`, threadID);
-            });
+            api.setTitle(lockThreadName[threadID], threadID, () => {});
           }
         }
 
@@ -883,9 +886,7 @@ const attemptLogin = () => {
           const newNickname = message.logMessageData.nickname;
           const targetUser = message.logMessageData.participantFbId || message.logMessageData.targetID;
           if (newNickname !== undefined && newNickname !== lockNicknames[threadID] && targetUser) {
-            api.changeNickname(lockNicknames[threadID], threadID, targetUser, (err) => {
-              if (!err) sendAndCache(`👁️ [ رادار الكنية ] تمت إعادة الاسم المثبت بنجاح!`, threadID);
-            });
+            api.changeNickname(lockNicknames[threadID], threadID, targetUser, () => {});
           }
         }
       }
@@ -1456,7 +1457,7 @@ const attemptLogin = () => {
         return;
       }
 
-      // ============ [ /سؤال - إجابة AI مفصّلة للجميع ] ============
+      // ============ [ /سؤال - إجابة AI مفصّلة بالرد على السائل ] ============
       if (body.startsWith("/سؤال ") || body === "/سؤال") {
         const question = body.replace("/سؤال", "").trim();
         if (!question) return sendAndCache("⚠️ اكتب سؤالك بعد الأمر!\n💡 مثال: /سؤال ما هو الذكاء الاصطناعي؟", threadID);
@@ -1466,7 +1467,12 @@ const attemptLogin = () => {
         await handleTypingAndDelay(threadID, 1500);
         const answer = await getAIReply(question, message.senderName || "", true, threadID, 0);
         reactToMessage(message.messageID, "✅");
-        return sendAndCache(`🤖 【 إجابة كانيكي 】\n\n${answer}`, threadID);
+        const sName = message.senderName || "يا صديقي";
+        const mention = { tag: `@${sName}`, id: senderID };
+        return sendAndCache({
+          body: `@${sName} :\n\n${answer}`,
+          mentions: [mention],
+        }, threadID);
       }
 
       if (body.startsWith("/تثبيت_الكنية ")) {
@@ -1476,12 +1482,12 @@ const attemptLogin = () => {
         api.getThreadInfo(threadID, async (err, info) => {
           if (err || !info) return sendAndCache("❌ فشل التحقق.", threadID);
           lockNicknames[threadID] = fixedName;
-          sendAndCache(`🔒 جاري قفل الكنيات وصهر الاسم [ ${fixedName} ]...`, threadID);
+          sendAndCache(`🔒 جاري تثبيت كنية [ ${fixedName} ] على الجميع...`, threadID);
           for (const userID of info.participantIDs) {
             if (!lockNicknames[threadID]) break;
             await new Promise(resolve => { api.changeNickname(fixedName, threadID, userID, () => setTimeout(resolve, 350)); });
           }
-          sendAndCache("🎯 تم قفل وتثبيت كنيات كافة الأعضاء!", threadID);
+          sendAndCache(`✅ تم — الكنية مثبّتة على كل الأعضاء. أي تغيير سيُعاد تلقائياً بصمت.`, threadID);
         });
         return;
       }
@@ -1568,45 +1574,25 @@ const attemptLogin = () => {
         else if (mode === "ايقاف" || mode === "إيقاف") { antiOutSettings[threadID] = false; return sendAndCache("🔓 تم إيقاف نظام الحماية.", threadID); }
       }
 
-      // ============ [ /الاوامر 1-4 — GIF متحركة تحتوي الأوامر مدمجة داخلها ] ============
+      // ============ [ /الاوامر 1-4 — قائمة نصية كاملة ] ============
       const gifPageMatch = body.match(/^\/الاوامر\s*([1-4])$/);
       if (body === "/الاوامر" || gifPageMatch) {
         const gifPage = gifPageMatch ? parseInt(gifPageMatch[1]) : 1;
         stats.commandsExecuted++;
-        reactToMessage(message.messageID, "🎨");
-        await handleTypingAndDelay(threadID, 800);
+        reactToMessage(message.messageID, "📋");
+        await handleTypingAndDelay(threadID, 600);
 
-        // الحصول على GIF الجاهزة أو توليدها الآن إذا لم تكن جاهزة
-        let gifPath = menuGifPaths[gifPage];
-        if (!gifPath || !fs.existsSync(gifPath)) {
-          try {
-            const { generatePageGif } = require("./generate-menu-gif");
-            gifPath = await generatePageGif(gifPage);
-            menuGifPaths[gifPage] = gifPath;
-          } catch (genErr) {
-            appendLog("WARN", `فشل توليد GIF ${gifPage}: ${genErr.message}`);
-          }
-        }
+        const pageTexts = {
+          1: `╔══════════════════════════╗\n    ⚡ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 1\n╚══════════════════════════╝\n\n┌─〔 ⚙️ التحكم الأساسي 〕\n│  🟢 /تشغيل — تفعيل البوت\n│  🔴 /ايقاف — تعطيل البوت\n│  🔒 /قفل — للمالك والمشرفين فقط\n│  🔓 /فتح — إتاحة البوت للجميع\n│  🔐 /قفل_كامل — المالك فقط\n│  🔓 /فتح_كامل — إلغاء القفل الكامل\n│  💬 /محاكاة_الكتابة تشغيل/ايقاف\n│  👁️ /مراقبة تشغيل — رصد المجموعة\n│  🚫 /مراقبة ايقاف — إيقاف الرصد\n│  🔍 /اعطني الايدي — ايدي شخص بالرد\n│  ⏱️ /ابتيم — مدة تشغيل البوت\n│  🍪 /تحديث_الكوكيز — تحديث فوري\n└──────────────────────────\n💡 /الاوامر 2 للصفحة التالية`,
 
-        if (gifPath && fs.existsSync(gifPath)) {
-          // الأوامر مدمجة داخل الصورة — نص الرسالة مبسّط فقط
-          const labels = { 1: "التحكم الأساسي", 2: "الحماية والمجموعة", 3: "AI والميديا", 4: "الألعاب والأداء" };
-          const label = labels[gifPage] || "";
-          api.sendMessage({
-            body: `🔒 قائمة الأوامر ${gifPage} — ${label}`,
-            attachment: fs.createReadStream(gifPath),
-          }, threadID);
-          return;
-        }
+          2: `╔══════════════════════════╗\n    🛡️ 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 2\n╚══════════════════════════╝\n\n┌─〔 🛡️ الحماية وإدارة المجموعة 〕\n│  👑 هات ادمن — ترقيتك لـ Admin\n│  👑 !كانيكي ادمن [رابط] — إضافة مشرف\n│  🔻 !كانيكي نزع الادمن — نزع المشرف\n│  ☢️ /تدمير طرد — طرد كل المشرفين\n│  📉 /تدمير رتبة — نزع رتب الجميع\n│  🛡️ /حماية تشغيل/ايقاف\n│  🚷 /طرد — طرد بالرد على رسالته\n│  🚷 /منع_المغادرة تشغيل/ايقاف\n│  🧹 /اصلاح — تنظيف الكنيات\n│  🗑️ /مسح — حذف رسالة البوت بالرد\n│  🧹 /مسح_الكل — سحب آخر رسائل\n│  🚪 /غادر — مغادرة المجموعة\n└──────────────────────────\n💡 /الاوامر 3 للصفحة التالية`,
 
-        // fallback نصي إذا فشل توليد GIF
-        const fallbacks = {
-          1: "📋 الأوامر 1: /تشغيل • /ايقاف • /قفل • /فتح • /مراقبة تشغيل • /اعطني الايدي • /ابتيم",
-          2: "📋 الأوامر 2: هات ادمن • !كانيكي ادمن • /تدمير طرد • /طرد • /اصلاح • /مسح • /غادر",
-          3: "📋 الأوامر 3: كانيكي [سؤال] • /سؤال • بنترست • /افتار • /تحميل_صوت • /صوت • /مانغا",
-          4: "📋 الأوامر 4: /اسرع • /نيزك • /برق • /رعد • /تشغيل_المحرك • /معلومات_المجموعة",
+          3: `╔══════════════════════════╗\n    🤖 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 3\n╚══════════════════════════╝\n\n┌─〔 🎬 الذكاء الاصطناعي والميديا 〕\n│  🤖 كانيكي [رسالة] — رد ذكي\n│  ❓ /سؤال [سؤالك] — إجابة مفصّلة\n│  📌 بنترست [كلمة] — 5 صور\n│  📸 /افتار [اسم] — صور أنمي 2K\n│  🎵 /تحميل_صوت [اسم] — تحميل أغنية\n│  🔊 /صوت [النص] — نص إلى صوت\n│  📛 /سيطرة_الاسم [اسم] — قفل اسم الجروب\n│  👁️ /تثبيت_الكنية [اسم] — فرض الكنية\n│  👁️ /شارنغان [نص] — كنيات مؤقتة\n│  📚 /مانغا — قراءة المانجا\n│  🎬 /فيديو — عرض الفيديوهات\n└──────────────────────────\n💡 /الاوامر 4 للصفحة التالية`,
+
+          4: `╔══════════════════════════╗\n    👑 𝑲𝑨𝑵𝑬𝑲𝑰 𝑩𝑶𝑻 — قائمة الاوامر 4\n╚══════════════════════════╝\n\n┌─〔 ⚡ الألعاب والأداء 〕\n│  🎮 /اسرع — لعبة الكلمات المقلوبة\n│  ☄️ /نيزك [نص] — رسالة تكرارية\n│  🛑 /ايقاف_نيزك — إيقاف النيزك\n│  ⚡ /برق — سبام سريع\n│  ⚡ /برق_صامت — سبام بدون إشعار\n│  🚫 /ايقاف_البرق — إيقاف البرق\n│  ⛈️ /رعد — رسالة ثابتة مجدولة\n│  🛑 /ايقاف_الرعد — إيقاف الرعد\n│  📊 /معلومات_المجموعة — إحصاءات\n│  ⚡ /تشغيل_المحرك — أداء أقصى\n│  🛑 /ايقاف_المحرك — وضع طبيعي\n└──────────────────────────\n✨ Kaneki Bot — نظام متكامل`,
         };
-        return sendAndCache(fallbacks[gifPage] || fallbacks[1], threadID);
+
+        return sendAndCache(pageTexts[gifPage] || pageTexts[1], threadID);
       }
 
       if (body.startsWith("/شارنغان ")) {
@@ -1743,6 +1729,63 @@ ${adminNames}
       }
 
       // ============ [ /مراقبة — تشغيل/ايقاف المراقبة ] ============
+      // ============ [ /تحديث_الكوكيز — تحديث فوري للكوكيز ] ============
+      if (body === "/تحديث_الكوكيز") {
+        if (senderID !== OWNER_ID) return sendAndCache("⛔ هذا الأمر للمالك فقط.", threadID);
+        stats.commandsExecuted++;
+        try {
+          const freshState = api.getAppState();
+          if (freshState && freshState.length > 0) {
+            fs.writeFileSync(APPSTATE_FILE, JSON.stringify(freshState, null, 2));
+            cookieLastSaved = new Date().toISOString();
+            appendLog("INFO", "🍪 تم تحديث الكوكيز يدوياً بنجاح.");
+            return sendAndCache(`✅ تم تحديث الكوكيز بنجاح!\n🕐 الوقت: ${new Date().toLocaleString("ar-SA")}`, threadID);
+          } else {
+            return sendAndCache("⚠️ تعذّر جلب الكوكيز من API.", threadID);
+          }
+        } catch (cookieErr) {
+          return sendAndCache(`❌ فشل التحديث: ${cookieErr.message}`, threadID);
+        }
+      }
+
+      // ============ [ /تطوير — وضع دردشة المطور بالذكاء الاصطناعي ] ============
+      if (body === "/تطوير" && senderID === OWNER_ID) {
+        stats.commandsExecuted++;
+        devSessions[threadID] = { active: true, history: [] };
+        return sendAndCache(`🔧 وضع المطور مفعّل!\n\nكلّمني بأي شيء تريد إضافته للبوت وسأساعدك بالتفصيل.\n💡 اكتب /انهاء_التطوير للخروج`, threadID);
+      }
+
+      if (body === "/انهاء_التطوير" && senderID === OWNER_ID) {
+        if (devSessions[threadID]) {
+          delete devSessions[threadID];
+          return sendAndCache("✅ تم إنهاء جلسة التطوير.", threadID);
+        }
+      }
+
+      // إذا كانت جلسة تطوير نشطة
+      if (devSessions[threadID]?.active && senderID === OWNER_ID) {
+        const session = devSessions[threadID];
+        session.history.push({ role: "user", parts: [{ text: body }] });
+        reactToMessage(message.messageID, "🔧");
+        await handleTypingAndDelay(threadID, 1200);
+        try {
+          if (!process.env.GEMINI_API_KEY) {
+            return sendAndCache("⚠️ GEMINI_API_KEY غير مضبوط. أضفه لتفعيل وضع المطور الذكي.", threadID);
+          }
+          const devModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+          const devPrompt = `أنت مساعد تطوير بوت فيسبوك محترف. البوت مبني بـ Node.js مع fca-unofficial.
+عند الرد: اشرح ما ستفعله، ثم أعطِ الكود الجاهز في code block، ثم اذكر أين يُضاف في index.js.
+استخدم sendAndCache للإرسال وapi.listenMqtt للاستماع. الملفات في artifacts/fb-bot/.
+سجل المحادثة: ${JSON.stringify(session.history.slice(-6))}`;
+          const devResult = await devModel.generateContent(`${devPrompt}\n\nطلب المطور: ${body}`);
+          const devReply = devResult.response.text().trim();
+          session.history.push({ role: "model", parts: [{ text: devReply }] });
+          return sendAndCache(devReply, threadID);
+        } catch (devErr) {
+          return sendAndCache(`❌ خطأ في AI: ${devErr.message}`, threadID);
+        }
+      }
+
       if (body === "/مراقبة تشغيل") {
         if (!isAdmin(senderID)) return sendAndCache("⛔ هذا الأمر للمشرفين فقط.", threadID);
         stats.commandsExecuted++;
