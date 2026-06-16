@@ -16,7 +16,10 @@ healthcheckTimeout = 300
 # ============================================================
 #  Environment Variables — set these in Railway dashboard:
 #
-#  GEMINI_API_KEY   — Google Gemini API key for AI replies
-#  OWNER_ID         — Your Facebook UID (100079889283302)
+#  GEMINI_API_KEY       — Google Gemini API key (AI replies + dev chat)
+#  ANTHROPIC_API_KEY    — Claude Sonnet API key (optional)
+#  OPENAI_API_KEY       — ChatGPT API key (optional)
+#  GROQ_API_KEY         — Groq LLaMA API key (optional, fastest)
+#  OWNER_ID             — Your Facebook UID (100079889283302)
 #
 # ============================================================
