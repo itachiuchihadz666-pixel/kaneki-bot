@@ -1,15 +1,14 @@
 [build]
-builder = "nixpacks"
+builder = "RAILPACK"
 buildCommand = "npm install --production=false"
-
-[build.env]
-NODE_VERSION = "20"
-NPM_CONFIG_PRODUCTION = "false"
 
 [deploy]
 startCommand = "node index.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 15
+
+[deploy.variables]
+RAILPACK_NODE_VERSION = "20"
 
 # ============================================================
 #  Environment Variables — set these in Railway dashboard:
